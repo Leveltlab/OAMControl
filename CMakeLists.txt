@@ -47,6 +47,7 @@ pico_enable_stdio_usb(OAMControl 1)
 # Add the standard library to the build
 target_link_libraries(OAMControl
         pico_stdlib
+        pico_multicore
         hardware_gpio
         hardware_timer)
 

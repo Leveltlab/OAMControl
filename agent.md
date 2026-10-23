@@ -1,9 +1,9 @@
 # Agent guidance for OAMControl
 
-The full spec is [implementationdetails.txt](implementationdetails.txt). Keep this file and the spec in sync; if they disagree, the spec wins and this file gets fixed.
+The full spec is [implementationdetails.md](implementationdetails.md). Keep this file and the spec in sync; if they disagree, the spec wins and this file gets fixed.
 
 ## Project purpose
-Raspberry Pi Pico 2 W firmware that generates a timed gate pulse for the output AOM of a Coherent Monaco laser. A stimulus TTL arms the controller; the next microscope TTL starts a delay; after the delay the gate output goes high for a configured duration.
+Raspberry Pi Pico 2 W firmware that generates a timed gate pulse for the output AOM of a Coherent Monaco laser. A stimulus TTL arms the controller; each microscope frame-onset TTL then starts a delay, after which the gate output goes high for a configured duration. The controller disarms itself after a configured number of gate pulses.
 
 ## Hardware model
 | Signal  | GPIO | Direction | Connects to |
@@ -14,16 +14,17 @@ Raspberry Pi Pico 2 W firmware that generates a timed gate pulse for the output 
 | STATUS  | 25   | output    | status indicator (**must move**, see below) |
 
 - **GPIO25 conflict:** on the Pico 2 W, GPIO23/24/25/29 belong to the CYW43 WiFi chip. Do not use them. STATUS must move to a free GPIO with an external LED.
-- **Monaco Gate 1** (manual p. 3-18): high = 3.3–5.0 V, low = 0–0.5 V, 10 kΩ series resistor, HD-BNC connector. Gate 2 is unused ("spare for future use"). The laser must be in Gated Mode (`PM=1` / "Enable External Gate").
+- **Monaco Gate 1** (manual p. 3-18): high = 3.3–5.0 V, low = 0–0.5 V, 10 kΩ series resistor, HD-BNC connector. Gate 2 is unused ("spare for future use"). The laser is in Gated Mode (`PM=1` / "Enable External Gate") or Burst Mode; the user chooses, the firmware does not depend on it.
 - The Pico's 3.3 V output is exactly the minimum high level, so GATE drives Gate 1 through a 5 V buffer (e.g. 74AHCT1G125) with a ~10 kΩ pull-down on the buffer input.
 - TTL inputs need series resistors (~1 kΩ) or a buffer: RP2350 inputs are only 5 V tolerant while powered.
 
 ## Timing behaviour (current)
-- A rising edge on ARM, or the `ARM` command, arms the controller.
-- The next rising edge on TRIGGER while armed starts the delay and disarms (one pulse per arm).
-- After the delay, GATE goes high for the pulse duration, then low.
-- Triggers while disarmed or while the gate is high are ignored.
-- Open behaviour questions are listed in the spec (Q1–Q9). Do not decide them in code; ask.
+- A rising edge on ARM, or the `ARM` command, arms the controller and latches delay, duration and pulse count.
+- Each rising edge on TRIGGER (frame onset) while armed starts the delay; after the delay, GATE goes high for the duration, then low. One gate pulse per trigger.
+- The controller disarms by itself after the last of `pulse_count` gate pulses has ended.
+- An armed run cannot be stopped, restarted or changed: no reset command, ARM edges ignored while armed, `SET_*` and `ARM` rejected while armed.
+- Triggers while disarmed or during a delay or gate pulse are ignored. No glitch filtering.
+- The behaviour decisions are recorded in the spec (Q1–Q10). Do not change them in code without asking.
 
 ## Units
 Microseconds everywhere: delay, duration, and all command parameters.
@@ -32,16 +33,17 @@ Microseconds everywhere: delay, duration, and all command parameters.
 Line-based text over USB CDC serial (UART stdio is also enabled):
 - `SET_DELAY <us>` → `delay_us=<us>`
 - `SET_PULSE <us>` → `pulse_us=<us>`
-- `GET` → `armed=<0|1> delay_us=<us> pulse_us=<us> gate=<0|1>`
+- `SET_COUNT <n>` → `pulse_count=<n>` (n >= 1, else `error: count must be >= 1`)
+- `GET` → `armed=<0|1> delay_us=<us> pulse_us=<us> pulse_count=<n> remaining=<n> gate=<0|1>`
 - `ARM` → `armed`
-- `RESET` → `reset`
+- `SET_*` or `ARM` while armed → `error: armed`
 
 Every command gets a reply. New transports (e.g. UDP) must use the same command names and units.
 
 ## Constraints
-- **Timing path target: PIO.** The current GPIO-interrupt + `add_alarm_in_us()` path gives ~1–5 µs jitter, worse under WiFi/USB load. New timing work moves trigger → delay → gate → duration into a PIO state machine; the CPU only loads parameters into the FIFO.
-- Until then: keep the main loop non-blocking, and no blocking I/O or `printf` inside IRQ or alarm callbacks.
-- Parameter changes must never take effect mid-pulse.
+- **Core split:** core 1 busy-polls ARM/TRIGGER and times the gate with no interrupts; core 0 handles serial IO. Serial IO must never interrupt or delay core 1. Only core 1 writes the armed state, remaining count and GATE.
+- **Timing path target: PIO.** The polling path gives ~1 µs jitter. New timing work moves trigger → delay → gate → duration into a PIO state machine; the CPU only loads parameters into the FIFO.
+- No parameter changes while armed.
 
 ## Safety
 - GATE is low by default: at boot, reset, during flashing and after a crash (external pull-down, watchdog).

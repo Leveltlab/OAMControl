@@ -3,6 +3,7 @@
 #include <stdlib.h>
 
 #include "pico/stdlib.h"
+#include "pico/multicore.h"
 #include "hardware/gpio.h"
 #include "hardware/timer.h"
 
@@ -11,56 +12,99 @@
 #define GATE_GPIO 15
 #define STATUS_GPIO 25
 
+/*
+ * Core 1 polls ARM and TRIGGER and generates the gate pulses; it runs no
+ * interrupts, so serial IO on core 0 cannot delay or interrupt it.
+ * g_armed and g_pulses_remaining are written only by core 1. Core 0 changes
+ * the parameters (only while disarmed) and posts ARM requests, which core 1
+ * executes. Once armed, a run cannot be stopped or restarted: it disarms by
+ * itself after the last gate pulse.
+ */
 static volatile bool g_armed = false;
-static volatile bool g_pulse_active = false;
 static volatile uint32_t g_delay_us = 50000;
 static volatile uint32_t g_pulse_us = 5000;
+static volatile uint32_t g_pulse_count = 1;  /* gate pulses per arm, >= 1 */
+static volatile uint32_t g_pulses_remaining = 0;
+static volatile bool g_arm_request = false;
 
-static void set_gate_state(bool active)
+static bool g_arm_prev = false;
+
+/* Parameters latched at arm time; core 1 uses only these while armed. */
+static uint32_t g_armed_delay_us;
+static uint32_t g_armed_pulse_us;
+
+static void arm(void)
 {
-    gpio_put(GATE_GPIO, active ? 1 : 0);
-    g_pulse_active = active;
+    g_armed_delay_us = g_delay_us;
+    g_armed_pulse_us = g_pulse_us;
+    g_pulses_remaining = g_pulse_count;
+    g_armed = true;
+    gpio_put(STATUS_GPIO, 1);
 }
 
-static int64_t gate_end_callback(alarm_id_t id, void *user_data)
+static void disarm(void)
 {
-    (void)id;
-    (void)user_data;
-    set_gate_state(false);
-    return 0;
+    g_armed = false;
+    gpio_put(STATUS_GPIO, 0);
 }
 
-static int64_t gate_delay_callback(alarm_id_t id, void *user_data)
+/* Arms on an ARM rising edge or an ARM request; ignored while armed. */
+static void poll_arm(void)
 {
-    (void)id;
-    (void)user_data;
-    set_gate_state(true);
-    add_alarm_in_us(g_pulse_us, gate_end_callback, NULL);
-    return 0;
-}
+    bool arm_now = gpio_get(ARM_GPIO);
+    bool rising = arm_now && !g_arm_prev;
+    g_arm_prev = arm_now;
 
-static void gpio_irq_callback(uint gpio, uint32_t events)
-{
-    if ((gpio == ARM_GPIO) && (events & GPIO_IRQ_EDGE_RISE)) {
-        g_armed = true;
-        gpio_put(STATUS_GPIO, 1);
-        return;
+    bool request = g_arm_request;
+    if (request) {
+        g_arm_request = false;
     }
 
-    if ((gpio == TRIGGER_GPIO) && (events & GPIO_IRQ_EDGE_RISE)) {
-        if (!g_armed || g_pulse_active) {
-            return;
+    if ((rising || request) && !g_armed) {
+        arm();
+    }
+}
+
+static void trigger_core_main(void)
+{
+    bool trig_prev = gpio_get(TRIGGER_GPIO);
+    g_arm_prev = gpio_get(ARM_GPIO);
+
+    while (true) {
+        poll_arm();
+
+        bool trig_now = gpio_get(TRIGGER_GPIO);
+        bool rising = trig_now && !trig_prev;
+        trig_prev = trig_now;
+        if (!rising || !g_armed) {
+            continue;
         }
 
-        g_armed = false;
-        gpio_put(STATUS_GPIO, 0);
-        add_alarm_in_us(g_delay_us, gate_delay_callback, NULL);
+        absolute_time_t t_trigger = get_absolute_time();
+        busy_wait_until(delayed_by_us(t_trigger, g_armed_delay_us));
+        gpio_put(GATE_GPIO, 1);
+        busy_wait_us_32(g_armed_pulse_us);
+        gpio_put(GATE_GPIO, 0);
+
+        if (--g_pulses_remaining == 0) {
+            disarm();
+        }
+
+        /* Edges during the delay or pulse are ignored: resample the levels
+           so an input that went high meanwhile is not seen as a new edge. */
+        trig_prev = gpio_get(TRIGGER_GPIO);
+        g_arm_prev = gpio_get(ARM_GPIO);
     }
 }
 
 static void handle_command(char *line)
 {
     if (line[0] == '\0') {
+        return;
+    }
+
+    if ((strncmp(line, "SET_", 4) == 0 || strcmp(line, "ARM") == 0) && g_armed) {
+        printf("error: armed\n");
         return;
     }
 
@@ -76,27 +120,31 @@ static void handle_command(char *line)
         return;
     }
 
+    if (strncmp(line, "SET_COUNT ", 10) == 0) {
+        uint32_t count = (uint32_t)strtoul(line + 10, NULL, 10);
+        if (count == 0) {
+            printf("error: count must be >= 1\n");
+            return;
+        }
+        g_pulse_count = count;
+        printf("pulse_count=%lu\n", (unsigned long)g_pulse_count);
+        return;
+    }
+
     if (strcmp(line, "GET") == 0) {
-        printf("armed=%d delay_us=%lu pulse_us=%lu gate=%d\n",
+        printf("armed=%d delay_us=%lu pulse_us=%lu pulse_count=%lu remaining=%lu gate=%d\n",
                g_armed,
                (unsigned long)g_delay_us,
                (unsigned long)g_pulse_us,
+               (unsigned long)g_pulse_count,
+               (unsigned long)g_pulses_remaining,
                gpio_get(GATE_GPIO));
         return;
     }
 
     if (strcmp(line, "ARM") == 0) {
-        g_armed = true;
-        gpio_put(STATUS_GPIO, 1);
+        g_arm_request = true;
         printf("armed\n");
-        return;
-    }
-
-    if (strcmp(line, "RESET") == 0) {
-        g_armed = false;
-        set_gate_state(false);
-        gpio_put(STATUS_GPIO, 0);
-        printf("reset\n");
         return;
     }
 
@@ -149,11 +197,10 @@ int main()
     gpio_set_dir(STATUS_GPIO, GPIO_OUT);
     gpio_put(STATUS_GPIO, 0);
 
-    gpio_set_irq_enabled_with_callback(ARM_GPIO, GPIO_IRQ_EDGE_RISE, true, gpio_irq_callback);
-    gpio_set_irq_enabled(TRIGGER_GPIO, GPIO_IRQ_EDGE_RISE, true);
+    multicore_launch_core1(trigger_core_main);
 
     printf("OAMControl ready\n");
-    printf("Commands: SET_DELAY <us>, SET_PULSE <us>, GET, ARM, RESET\n");
+    printf("Commands: SET_DELAY <us>, SET_PULSE <us>, SET_COUNT <n>, GET, ARM\n");
 
     while (true) {
         process_serial_commands();

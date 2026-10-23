@@ -41,8 +41,8 @@ Monaco manual, "Gate 1 and Gate 2" (p. 3-18):
   - The input has a 10 kohm series resistor (high impedance, ~0.5 mA at 5 V).
   - Gate 1 controls the laser pulse train. Gate 2 is a spare "for future use"
     and does nothing. Use Gate 1.
-  - The laser must be in Gated Mode: PM=1, or "Enable External Gate" on the
-    Triggering tab of the Coherent GUI.
+  - The laser must be in Gated Mode (PM=1, or "Enable External Gate" on the
+    Triggering tab of the Coherent GUI) or Burst Mode; see Q9.
 
 A 3.3 V Pico GPIO sits exactly at the minimum high level, with zero margin.
 Regulator tolerance, ground offset or cable noise can then give an intermittent
@@ -75,35 +75,60 @@ gate. Therefore:
 Important: in Gated Mode the laser's own pulse clock keeps running, and the
 gate only lets pulses through. The first laser pulse therefore comes up to one
 laser period after the gate goes high (1 us at 1 MHz). The number of pulses is
-roughly duration x rep rate. See open question Q9 for Burst Mode as an
-alternative.
+roughly duration x rep rate. Burst Mode is the alternative; see Q9.
 
 
 4. Arming and triggering behaviour
 ----------------------------------
 Current implementation:
-  - A rising edge on ARM (or the ARM command) arms the controller.
-  - The next rising edge on TRIGGER, while armed, starts the delay and
-    disarms (one pulse per arm).
-  - Triggers while not armed, or while a gate pulse is active, are ignored.
+  - A rising edge on ARM (or the ARM command) arms the controller, using
+    the delay, duration and pulse_count set at that moment.
+  - Each rising edge on TRIGGER, while armed, starts the delay and then one
+    gate pulse.
+  - The controller disarms by itself when the last of pulse_count gate
+    pulses (SET_COUNT, >= 1, default 1) has ended.
+  - An armed run cannot be stopped, restarted or changed: ARM edges, the
+    ARM command and SET_* commands are ignored or rejected while armed.
+  - Triggers while not armed, or during the delay or gate pulse of a
+    previous trigger, are ignored.
+  - After the run the user can change parameters and arm again.
 
-Open questions (decide before extending the firmware):
-  Q1  Is arming edge-based or level-based (armed while stimulus TTL is high)?
-  Q2  One gate pulse per arm, or one per microscope TTL until disarmed?
-  Q3  What disarms: stimulus TTL low, pulse count, timeout, or a command?
-  Q4  What does the microscope TTL represent (frame, line, volume start)?
-      This sets the expected trigger rate.
-  Q5  A new trigger during the delay or the pulse: ignore or restart?
-      (Currently: a trigger during the delay is not possible because the
-      controller disarms on the first trigger; during the pulse it is ignored.)
-  Q6  Rising or falling edge, and is glitch filtering needed?
-  Q7  Are pulse trains per trigger needed (N gate pulses at a set period)?
-  Q8  Parameter changes while armed: must take effect between trials, never
-      mid-pulse. How should this be enforced?
-  Q9  Gated Mode (PM=1, Pico sets the duration) or Burst Mode (laser emits a
-      fixed 1..1,000,000 pulses when Gate 1 goes high, Pico only sets the
-      delay)? Burst Mode gives exact pulse counts.
+Decisions:
+  Q1  Arming is edge-based: a rising edge on ARM arms the controller; the
+      ARM level afterwards has no effect. ARM edges while armed are
+      ignored (no re-arm).
+  Q2  One gate pulse per microscope TTL until disarmed. The number of gate
+      pulses per arm is set with SET_COUNT; the controller disarms after
+      the last one.
+  Q3  Only the pulse count disarms: the controller disarms automatically
+      after the last of pulse_count gate pulses has ended. There is no
+      reset or abort command; an armed run cannot be interrupted by the
+      user.
+  Q4  The microscope TTL is the frame onset, so each gate pulse is
+      triggered by a frame onset. The trigger rate is the frame rate.
+      delay + duration must be shorter than the frame period, otherwise
+      the next frame onset is ignored and that frame gets no pulse.
+  Q5  A new trigger during the delay or the pulse is ignored (no restart).
+  Q6  The rising edge of the microscope TTL marks frame onset. No glitch
+      filtering for now; to be revisited after verifying the inputs with
+      an oscilloscope.
+  Q7  No pulse trains: exactly one gate pulse per trigger.
+  Q9  Laser mode is the user's choice, set on the laser; the firmware
+      does not depend on it. Gated Mode (PM=1): the laser emits pulses
+      for as long as the gate is high, so the gate duration sets the
+      pulse count (roughly duration x rep rate). Burst Mode: the laser
+      emits a fixed 1..1,000,000 pulses when Gate 1 goes high, giving an
+      exact count; set the gate duration so the burst fits inside it.
+  Q8  No parameter changes while armed. SET_DELAY, SET_PULSE, SET_COUNT
+      and ARM are rejected with "error: armed" until the run has ended.
+      Core 1 also latches delay, duration and count at arm time, so a SET
+      that races an ARM edge cannot affect the run.
+  Q10 While armed, trigger polling must not be interrupted by serial IO.
+      Core 1 polls ARM and TRIGGER and generates the gate with no
+      interrupts; core 0 handles serial IO and only posts parameters and
+      ARM requests to core 1.
 
+Open questions: none.
 
 5. Timing requirements
 ----------------------
@@ -116,9 +141,10 @@ Units: microseconds everywhere (delay and duration).
   - Duration accuracy: +/- 1 us.
 
 Implementation target: the trigger-to-gate path must not depend on CPU
-interrupts. The current code uses a GPIO interrupt plus add_alarm_in_us(),
-which gives roughly 1-5 us of jitter, worse with WiFi or USB activity. The
-target design is a PIO state machine: wait for trigger, count the delay, raise
+interrupts. The current code busy-polls the GPIOs on core 1 (no interrupts
+on that core) and times delay and duration against the 1 us system timer.
+This gives roughly 1 us of jitter, independent of USB or WiFi activity on
+core 0. The target design is a PIO state machine: wait for trigger, count the delay, raise
 the gate, count the duration, lower the gate. Jitter is then one system clock
 (~6.7 ns at 150 MHz). The CPU only loads delay/duration into the PIO FIFO.
 The CYW43 uses one PIO block; the RP2350 has three.
@@ -130,9 +156,13 @@ Current: line-based text commands over USB CDC serial (and UART stdio):
 
   SET_DELAY <us>   -> delay_us=<us>
   SET_PULSE <us>   -> pulse_us=<us>
-  GET              -> armed=<0|1> delay_us=<us> pulse_us=<us> gate=<0|1>
+  SET_COUNT <n>    -> pulse_count=<n>   (gate pulses per arm, n >= 1)
+  GET              -> armed=<0|1> delay_us=<us> pulse_us=<us> pulse_count=<n>
+                      remaining=<n> gate=<0|1>
   ARM              -> armed
-  RESET            -> reset
+
+  SET_* and ARM while armed -> error: armed
+  SET_COUNT 0               -> error: count must be >= 1
 
 USB serial is the primary interface: no network setup, no packet loss, and the
 stimulus computer is nearby. UDP over WiFi may be added later as an option; if
