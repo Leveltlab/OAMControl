@@ -1,0 +1,170 @@
+OAMControl - Implementation details
+===================================
+
+1. Purpose
+----------
+This application runs on a Raspberry Pi Pico 2 W. It controls the output AOM
+(OAM) of a Coherent Monaco laser with microsecond precision through the laser's
+Gate 1 input.
+
+The Pico 2 W receives two TTL signals on two input pins: one from the 2-photon
+microscope and one from the stimulus computer. The stimulus TTL arms the Pico.
+Once armed, a TTL from the microscope starts a timer with a configured delay.
+When the delay expires, the gate output goes high for a configured duration.
+The gate output is connected to Gate 1 on the Monaco, which emits laser pulses
+for as long as Gate 1 is high.
+
+Delay and duration are configurable at run time through a command interface
+(see section 6).
+
+
+2. Hardware and pin map
+-----------------------
+Current pin assignment (see OAMControl.c):
+
+  Signal    GPIO  Direction  Source / destination
+  ARM       2     input      stimulus computer TTL
+  TRIGGER   3     input      2-photon microscope TTL
+  GATE      15    output     Monaco Gate 1 (via 5 V buffer, see 2.1)
+  STATUS    25    output     status indicator  ** see known issue below **
+
+Known issue: on the Pico 2 W, GPIO25 is not the onboard LED. GPIO23, 24, 25
+and 29 are used for the CYW43 WiFi chip. STATUS must move to a free GPIO with
+an external LED. The onboard LED can only be driven through the CYW43 driver
+(cyw43_arch_gpio_put), which is not suitable for timing-critical code.
+
+2.1 Gate output to the Monaco (Gate 1)
+Monaco manual, "Gate 1 and Gate 2" (p. 3-18):
+  - Connector: HD-BNC (Amphenol 034-1030); HD-BNC-to-BNC adapters are in the
+    laser accessory kit.
+  - High input: 3.3 V to 5.0 V. Low input: 0 to 0.5 V.
+  - The input has a 10 kohm series resistor (high impedance, ~0.5 mA at 5 V).
+  - Gate 1 controls the laser pulse train. Gate 2 is a spare "for future use"
+    and does nothing. Use Gate 1.
+  - The laser must be in Gated Mode: PM=1, or "Enable External Gate" on the
+    Triggering tab of the Coherent GUI.
+
+A 3.3 V Pico GPIO sits exactly at the minimum high level, with zero margin.
+Regulator tolerance, ground offset or cable noise can then give an intermittent
+gate. Therefore:
+  - Drive Gate 1 through a 5 V buffer, e.g. 74AHCT1G125 (accepts 3.3 V input,
+    outputs 5 V, a few ns of delay).
+  - Power the buffer from 5 V. VBUS only carries 5 V when the Pico is powered
+    over USB; with another power source, use that 5 V supply.
+  - Put a pull-down (~10 kohm to GND) on the buffer input so the gate stays
+    low during boot, reset, flashing and whenever the pin is not driven.
+
+2.2 TTL inputs (ARM, TRIGGER)
+  - RP2350 inputs only tolerate 5 V while the Pico is powered. A 5 V TTL
+    arriving while the Pico is off can damage it. Add a ~1 kohm series
+    resistor per input as a minimum, or an input buffer.
+  - If ground loops between rigs are a problem, use a fast digital isolator
+    (e.g. ADuM series). Do not use optocouplers: they add microseconds of
+    variable delay.
+
+
+3. Signal timing
+----------------
+
+  ARM      ___/‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾
+  TRIGGER  _________/‾‾\_______________________________
+                    |<-- delay -->|<-- duration -->|
+  GATE     _______________________/‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾\___
+  LASER    _______________________|‖‖‖‖‖‖‖‖‖‖‖‖‖‖‖‖|___  (pulses at laser rep rate)
+
+Important: in Gated Mode the laser's own pulse clock keeps running, and the
+gate only lets pulses through. The first laser pulse therefore comes up to one
+laser period after the gate goes high (1 us at 1 MHz). The number of pulses is
+roughly duration x rep rate. See open question Q9 for Burst Mode as an
+alternative.
+
+
+4. Arming and triggering behaviour
+----------------------------------
+Current implementation:
+  - A rising edge on ARM (or the ARM command) arms the controller.
+  - The next rising edge on TRIGGER, while armed, starts the delay and
+    disarms (one pulse per arm).
+  - Triggers while not armed, or while a gate pulse is active, are ignored.
+
+Open questions (decide before extending the firmware):
+  Q1  Is arming edge-based or level-based (armed while stimulus TTL is high)?
+  Q2  One gate pulse per arm, or one per microscope TTL until disarmed?
+  Q3  What disarms: stimulus TTL low, pulse count, timeout, or a command?
+  Q4  What does the microscope TTL represent (frame, line, volume start)?
+      This sets the expected trigger rate.
+  Q5  A new trigger during the delay or the pulse: ignore or restart?
+      (Currently: a trigger during the delay is not possible because the
+      controller disarms on the first trigger; during the pulse it is ignored.)
+  Q6  Rising or falling edge, and is glitch filtering needed?
+  Q7  Are pulse trains per trigger needed (N gate pulses at a set period)?
+  Q8  Parameter changes while armed: must take effect between trials, never
+      mid-pulse. How should this be enforced?
+  Q9  Gated Mode (PM=1, Pico sets the duration) or Burst Mode (laser emits a
+      fixed 1..1,000,000 pulses when Gate 1 goes high, Pico only sets the
+      delay)? Burst Mode gives exact pulse counts.
+
+
+5. Timing requirements
+----------------------
+Units: microseconds everywhere (delay and duration).
+
+  - Delay range: 0 us to TBD (proposed 10 s).
+  - Duration range: 1 us to TBD (proposed 10 s), with a safety cap.
+  - Trigger-to-gate latency at delay 0: TBD (target < 1 us).
+  - Jitter: target < 50 ns.
+  - Duration accuracy: +/- 1 us.
+
+Implementation target: the trigger-to-gate path must not depend on CPU
+interrupts. The current code uses a GPIO interrupt plus add_alarm_in_us(),
+which gives roughly 1-5 us of jitter, worse with WiFi or USB activity. The
+target design is a PIO state machine: wait for trigger, count the delay, raise
+the gate, count the duration, lower the gate. Jitter is then one system clock
+(~6.7 ns at 150 MHz). The CPU only loads delay/duration into the PIO FIFO.
+The CYW43 uses one PIO block; the RP2350 has three.
+
+
+6. Control interface
+--------------------
+Current: line-based text commands over USB CDC serial (and UART stdio):
+
+  SET_DELAY <us>   -> delay_us=<us>
+  SET_PULSE <us>   -> pulse_us=<us>
+  GET              -> armed=<0|1> delay_us=<us> pulse_us=<us> gate=<0|1>
+  ARM              -> armed
+  RESET            -> reset
+
+USB serial is the primary interface: no network setup, no packet loss, and the
+stimulus computer is nearby. UDP over WiFi may be added later as an option; if
+so, every command must get a reply (acknowledgement) and use the same command
+names and units.
+
+Planned additions: STATUS (counters, firmware version), SAVE (store config in
+flash), FIRE (manual test pulse, bench only), range checking with an error
+reply, and a small Python client for the stimulus computer (e.g. PsychoPy).
+
+
+7. Safety
+---------
+  - The gate output must be low by default: at boot, reset, during flashing
+    and after a crash (external pull-down, watchdog forces GATE low).
+  - Enforce a maximum duration cap in firmware.
+  - Reject out-of-range or malformed parameter values; never apply a
+    partially parsed value.
+
+
+8. Non-goals
+------------
+  - No control of other laser parameters (power, rep rate, pulse mode); these
+    stay in the Coherent GUI / laser serial interface.
+  - No WiFi in the first version.
+
+
+9. Acceptance tests
+-------------------
+Measure with an oscilloscope on TRIGGER and GATE (and the laser photodiode
+or Sync output where available):
+  - 1000 triggers at minimum delay, maximum delay and maximum trigger rate.
+  - Report latency, jitter and duration error against section 5.
+  - Verify GATE stays low through power-up, reset and flashing.
+  - Verify Gate 1 reads high reliably at the buffer output (> 4.5 V).
