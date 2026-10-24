@@ -20,18 +20,21 @@ Delay and duration are configurable at run time through a command interface
 
 2. Hardware and pin map
 -----------------------
-Current pin assignment (see OAMControl.c):
+Current pin assignment (see OAMControl.c). The firmware uses RP2350 GPIO
+numbers (GPn); the physical header pin is listed separately. Pins 3, 8, 13,
+18, 23, 28, 33 and 38 are GND.
 
-  Signal    GPIO  Direction  Source / destination
-  ARM       2     input      stimulus computer TTL
-  TRIGGER   3     input      2-photon microscope TTL
-  GATE      15    output     Monaco Gate 1 (via 5 V buffer, see 2.1)
-  STATUS    25    output     status indicator  ** see known issue below **
+  Signal    GPIO  Pin  Direction  Source / destination
+  ARM       GP2   4    input      stimulus computer TTL
+  TRIGGER   GP3   5    input      2-photon microscope TTL
+  GATE      GP15  20   output     Monaco Gate 1 (via 5 V buffer, see 2.1)
 
-Known issue: on the Pico 2 W, GPIO25 is not the onboard LED. GPIO23, 24, 25
-and 29 are used for the CYW43 WiFi chip. STATUS must move to a free GPIO with
-an external LED. The onboard LED can only be driven through the CYW43 driver
-(cyw43_arch_gpio_put), which is not suitable for timing-critical code.
+Neighbouring GND pins for the signal returns: pin 3 (next to ARM/TRIGGER)
+and pin 18 (next to GATE).
+
+There is no status LED: the device state (armed, remaining pulses, gate) is
+read with the GET command. Do not use GPIO23, 24, 25 or 29; on the Pico 2 W
+they are internal to the CYW43 WiFi chip and not on the header.
 
 2.1 Gate output to the Monaco (Gate 1)
 Monaco manual, "Gate 1 and Gate 2" (p. 3-18):
@@ -198,3 +201,4 @@ or Sync output where available):
   - Report latency, jitter and duration error against section 5.
   - Verify GATE stays low through power-up, reset and flashing.
   - Verify Gate 1 reads high reliably at the buffer output (> 4.5 V).
+

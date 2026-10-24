@@ -7,10 +7,10 @@
 #include "hardware/gpio.h"
 #include "hardware/timer.h"
 
-#define ARM_GPIO 2
-#define TRIGGER_GPIO 3
-#define GATE_GPIO 15
-#define STATUS_GPIO 25
+/* RP2350 GPIO numbers, not physical header pins. */
+#define ARM_GPIO 2       /* pin 4 */
+#define TRIGGER_GPIO 3   /* pin 5 */
+#define GATE_GPIO 15     /* pin 20 */
 
 /*
  * Core 1 polls ARM and TRIGGER and generates the gate pulses; it runs no
@@ -39,13 +39,11 @@ static void arm(void)
     g_armed_pulse_us = g_pulse_us;
     g_pulses_remaining = g_pulse_count;
     g_armed = true;
-    gpio_put(STATUS_GPIO, 1);
 }
 
 static void disarm(void)
 {
     g_armed = false;
-    gpio_put(STATUS_GPIO, 0);
 }
 
 /* Arms on an ARM rising edge or an ARM request; ignored while armed. */
@@ -192,10 +190,6 @@ int main()
     gpio_init(GATE_GPIO);
     gpio_set_dir(GATE_GPIO, GPIO_OUT);
     gpio_put(GATE_GPIO, 0);
-
-    gpio_init(STATUS_GPIO);
-    gpio_set_dir(STATUS_GPIO, GPIO_OUT);
-    gpio_put(STATUS_GPIO, 0);
 
     multicore_launch_core1(trigger_core_main);
 

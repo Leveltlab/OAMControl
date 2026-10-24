@@ -6,14 +6,15 @@ The full spec is [implementationdetails.md](implementationdetails.md). Keep this
 Raspberry Pi Pico 2 W firmware that generates a timed gate pulse for the output AOM of a Coherent Monaco laser. A stimulus TTL arms the controller; each microscope frame-onset TTL then starts a delay, after which the gate output goes high for a configured duration. The controller disarms itself after a configured number of gate pulses.
 
 ## Hardware model
-| Signal  | GPIO | Direction | Connects to |
-|---------|------|-----------|-------------|
-| ARM     | 2    | input     | stimulus computer TTL |
-| TRIGGER | 3    | input     | 2-photon microscope TTL |
-| GATE    | 15   | output    | Monaco **Gate 1** via 5 V buffer |
-| STATUS  | 25   | output    | status indicator (**must move**, see below) |
+GPIO numbers are RP2350 GPIOs (what the SDK uses), not physical header pins.
 
-- **GPIO25 conflict:** on the Pico 2 W, GPIO23/24/25/29 belong to the CYW43 WiFi chip. Do not use them. STATUS must move to a free GPIO with an external LED.
+| Signal  | GPIO | Pin | Direction | Connects to |
+|---------|------|-----|-----------|-------------|
+| ARM     | GP2  | 4   | input     | stimulus computer TTL |
+| TRIGGER | GP3  | 5   | input     | 2-photon microscope TTL |
+| GATE    | GP15 | 20  | output    | Monaco **Gate 1** via 5 V buffer |
+
+- **No status LED:** the device state is read with `GET`. Do not use GPIO23/24/25/29: on the Pico 2 W they are internal to the CYW43 WiFi chip and not on the header.
 - **Monaco Gate 1** (manual p. 3-18): high = 3.3–5.0 V, low = 0–0.5 V, 10 kΩ series resistor, HD-BNC connector. Gate 2 is unused ("spare for future use"). The laser is in Gated Mode (`PM=1` / "Enable External Gate") or Burst Mode; the user chooses, the firmware does not depend on it.
 - The Pico's 3.3 V output is exactly the minimum high level, so GATE drives Gate 1 through a 5 V buffer (e.g. 74AHCT1G125) with a ~10 kΩ pull-down on the buffer input.
 - TTL inputs need series resistors (~1 kΩ) or a buffer: RP2350 inputs are only 5 V tolerant while powered.
