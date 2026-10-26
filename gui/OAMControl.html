@@ -1,0 +1,654 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OAMControl</title>
+<!--
+  OAMControl web GUI. Talks to the Pico over USB serial with the Web Serial API
+  (Chrome or Edge, desktop). Open this file directly in the browser; no server
+  or install needed. Uses the same text commands as a serial terminal.
+-->
+<style>
+:root {
+  --bg: #f3f5f8;
+  --panel: #ffffff;
+  --fg: #17202b;
+  --muted: #5f6b7a;
+  --rule: #d5dbe3;
+  --accent: #1d5fd1;
+  --accent-fg: #ffffff;
+  --armed: #c2410c;
+  --armed-bg: #fdeee5;
+  --ok: #15803d;
+  --ok-bg: #e5f5ea;
+  --warn: #a16207;
+  --warn-bg: #fdf6dc;
+  --err: #b91c1c;
+  --log-bg: #f7f9fb;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: ui-monospace, "Cascadia Mono", Consolas, "SF Mono", monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f141a; --panel: #171e27; --fg: #e3e8ef; --muted: #98a3b3; --rule: #2b3543;
+    --accent: #5b9bff; --accent-fg: #0b1220;
+    --armed: #fb923c; --armed-bg: #3a2414;
+    --ok: #4ade80; --ok-bg: #12301d;
+    --warn: #facc15; --warn-bg: #352c0c;
+    --err: #f87171; --log-bg: #121820;
+    color-scheme: dark;
+  }
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 15px/1.5 var(--sans);
+}
+.wrap {
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 20px 16px 40px;
+  display: grid;
+  gap: 16px;
+}
+
+header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 16px;
+}
+h1 { margin: 0; font-size: 22px; font-weight: 650; letter-spacing: -0.01em; }
+.conn { display: flex; align-items: center; gap: 10px; margin-left: auto; }
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 600;
+  background: var(--rule);
+  color: var(--muted);
+}
+.pill::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+.pill.ok { background: var(--ok-bg); color: var(--ok); }
+.pill.armed { background: var(--armed-bg); color: var(--armed); }
+.pill.warn { background: var(--warn-bg); color: var(--warn); }
+
+.grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
+@media (max-width: 760px) { .grid { grid-template-columns: minmax(0, 1fr); } }
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  padding: 16px;
+  display: grid;
+  gap: 14px;
+  align-content: start;
+  min-width: 0;
+}
+h2 {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* status */
+.state { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.state .pill { font-size: 15px; padding: 5px 14px; }
+.readout { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.readout div { display: grid; gap: 2px; }
+.readout span { font-size: 12px; color: var(--muted); }
+.readout strong { font: 600 20px/1.2 var(--mono); font-variant-numeric: tabular-nums; }
+.gate-on { color: var(--armed); }
+.note { font-size: 13px; color: var(--muted); margin: 0; }
+
+/* form */
+form { display: grid; gap: 12px; }
+.field { display: grid; grid-template-columns: 9.5em minmax(0, 1fr); align-items: center; gap: 4px 12px; }
+.field label { font-weight: 550; }
+.field .hint { grid-column: 2; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.inputrow { display: flex; align-items: center; gap: 8px; }
+.inputrow .unit { color: var(--muted); font-size: 13px; width: 2.5em; }
+input[type="text"], input[type="number"] {
+  width: 100%;
+  min-width: 0;
+  padding: 7px 9px;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  font: 15px var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+input:read-only, input:disabled { color: var(--muted); }
+input:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.sep { border: 0; border-top: 1px solid var(--rule); margin: 2px 0; }
+
+.actions { display: flex; flex-wrap: wrap; gap: 10px; }
+button {
+  font: 600 14px var(--sans);
+  padding: 8px 16px;
+  border-radius: 6px;
+  border: 1px solid var(--rule);
+  background: var(--panel);
+  color: var(--fg);
+  cursor: pointer;
+}
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
+button.arm { background: var(--armed); border-color: var(--armed); color: #fff; }
+button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.msg { margin: 0; font-size: 14px; padding: 8px 10px; border-radius: 6px; }
+.msg.err { background: var(--armed-bg); color: var(--err); }
+.msg.warn { background: var(--warn-bg); color: var(--warn); }
+.msg.info { background: var(--log-bg); color: var(--muted); }
+
+/* log */
+.log {
+  background: var(--log-bg);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  height: 220px;
+  overflow: auto;
+  margin: 0;
+  padding: 8px 10px;
+  font: 13px/1.5 var(--mono);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.log .tx { color: var(--accent); }
+.log .rx { color: var(--fg); }
+.log .sys { color: var(--muted); }
+.log .bad { color: var(--err); }
+.cmdline { display: flex; gap: 8px; }
+.cmdline input { flex: 1; }
+
+.unsupported { border-color: var(--err); }
+@media (prefers-reduced-motion: no-preference) {
+  .pill { transition: background-color 0.15s, color 0.15s; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <h1>OAMControl</h1>
+    <span class="pill" id="connPill">Not connected</span>
+    <div class="conn">
+      <button class="primary" id="connectBtn" type="button">Connect</button>
+      <button id="disconnectBtn" type="button" hidden>Disconnect</button>
+    </div>
+  </header>
+
+  <p class="msg err" id="unsupported" hidden>This browser has no Web Serial support. Open this file in Chrome or Edge on a desktop computer.</p>
+
+  <div class="grid">
+    <section class="panel" aria-labelledby="statusTitle">
+      <h2 id="statusTitle">Device status</h2>
+      <div class="state">
+        <span class="pill" id="armPill">Unknown</span>
+        <span class="note" id="stateNote">Connect to the Pico to read its status.</span>
+      </div>
+      <div class="readout">
+        <div><span>Pulses left</span><strong id="roRemaining">–</strong></div>
+        <div><span>Pulses per run</span><strong id="roCount">–</strong></div>
+        <div><span>Gate output</span><strong id="roGate">–</strong></div>
+      </div>
+      <div class="readout">
+        <div><span>Delay</span><strong id="roDelay">–</strong></div>
+        <div><span>Duration</span><strong id="roPulse">–</strong></div>
+        <div><span>Last update</span><strong id="roTime">–</strong></div>
+      </div>
+      <p class="note">Status is read with <code>GET</code> four times a second. A run can also be armed by the stimulus computer's ARM input; it shows up here the same way.</p>
+    </section>
+
+    <section class="panel" aria-labelledby="paramTitle">
+      <h2 id="paramTitle">Run parameters</h2>
+      <form id="paramForm" autocomplete="off">
+        <div class="field">
+          <label for="delayUs">Delay</label>
+          <div class="inputrow"><input type="number" id="delayUs" min="0" max="4294967295" step="1" inputmode="numeric" value="0"><span class="unit">µs</span></div>
+          <span class="hint" id="delayHint">0 ms after the frame onset</span>
+        </div>
+        <div class="field">
+          <label for="pulseUs">Gate duration</label>
+          <div class="inputrow"><input type="number" id="pulseUs" min="1" max="4294967295" step="1" inputmode="numeric" value="5000"><span class="unit">µs</span></div>
+          <span class="hint" id="pulseHint">5 ms</span>
+        </div>
+        <div class="field">
+          <label for="pulseCount">Pulses per run</label>
+          <div class="inputrow"><input type="number" id="pulseCount" min="1" max="4294967295" step="1" inputmode="numeric" value="1"><span class="unit"></span></div>
+          <span class="hint">One gate pulse per frame onset; disarms after the last one.</span>
+        </div>
+        <hr class="sep">
+        <div class="field">
+          <label for="frameRate">Frame rate</label>
+          <div class="inputrow"><input type="number" id="frameRate" min="0" step="any" inputmode="decimal" placeholder="optional"><span class="unit">Hz</span></div>
+          <span class="hint" id="frameHint">Only used here to check timing; not sent to the Pico.</span>
+        </div>
+        <p class="msg warn" id="timingWarn" hidden></p>
+        <p class="msg" id="formMsg" hidden></p>
+        <div class="actions">
+          <button class="primary" id="applyBtn" type="submit" disabled>Send to Pico</button>
+          <button class="arm" id="armBtn" type="button" disabled>Arm</button>
+        </div>
+      </form>
+    </section>
+  </div>
+
+  <section class="panel" aria-labelledby="logTitle">
+    <h2 id="logTitle">Serial log</h2>
+    <pre class="log" id="log" aria-live="polite"></pre>
+    <form class="cmdline" id="cmdForm" autocomplete="off">
+      <label for="cmdInput" class="note" style="align-self:center">Command</label>
+      <input type="text" id="cmdInput" placeholder="e.g. GET" disabled>
+      <button id="cmdBtn" type="submit" disabled>Send</button>
+    </form>
+  </section>
+
+</div>
+
+<script>
+"use strict";
+
+const POLL_MS = 250;
+const REPLY_TIMEOUT_MS = 1000;
+const UINT32_MAX = 4294967295;
+const PICO_USB_VENDOR_ID = 0x2E8A;  // Raspberry Pi
+
+const $ = id => document.getElementById(id);
+const els = {
+  connPill: $("connPill"), connectBtn: $("connectBtn"), disconnectBtn: $("disconnectBtn"),
+  armPill: $("armPill"), stateNote: $("stateNote"),
+  roRemaining: $("roRemaining"), roCount: $("roCount"), roGate: $("roGate"),
+  roDelay: $("roDelay"), roPulse: $("roPulse"), roTime: $("roTime"),
+  form: $("paramForm"), delayUs: $("delayUs"), pulseUs: $("pulseUs"), pulseCount: $("pulseCount"),
+  frameRate: $("frameRate"), delayHint: $("delayHint"), pulseHint: $("pulseHint"), frameHint: $("frameHint"),
+  timingWarn: $("timingWarn"), formMsg: $("formMsg"), applyBtn: $("applyBtn"), armBtn: $("armBtn"),
+  log: $("log"), cmdForm: $("cmdForm"), cmdInput: $("cmdInput"), cmdBtn: $("cmdBtn"),
+};
+
+/* ---------- serial connection ---------- */
+
+let port = null;
+let reader = null;
+let readableClosed = null;
+let writer = null;
+let lineBuf = "";
+let pending = null;              // resolves the reply to the command in flight
+let queue = Promise.resolve();   // commands run one at a time
+let pollTimer = null;
+let device = null;               // last parsed GET reply
+let busy = false;                // a user action is in progress
+
+const encoder = new TextEncoder();
+
+async function connect() {
+  try {
+    const granted = await navigator.serial.getPorts();
+    port = granted.length === 1
+      ? granted[0]
+      : await navigator.serial.requestPort({ filters: [{ usbVendorId: PICO_USB_VENDOR_ID }] });
+    await port.open({ baudRate: 115200 });
+  } catch (err) {
+    port = null;
+    if (err.name !== "NotFoundError") logLine(`Could not open the port: ${err.message}`, "bad");
+    return;
+  }
+
+  writer = port.writable.getWriter();
+  const decoder = new TextDecoderStream();
+  readableClosed = port.readable.pipeTo(decoder.writable).catch(() => {});
+  reader = decoder.readable.getReader();
+  readLoop();
+
+  logLine("Connected.", "sys");
+  setConnected(true);
+
+  try {
+    await refresh({ fillForm: true, quiet: false });
+  } catch (err) {
+    logLine(`${err.message}. Is the OAMControl firmware running on this device?`, "bad");
+  }
+  pollTimer = setInterval(poll, POLL_MS);
+}
+
+let polling = false;
+async function poll() {
+  if (polling) return;  // previous GET still waiting for its reply
+  polling = true;
+  try {
+    await refresh({ quiet: true });
+  } catch {
+    // a missed reply is retried on the next tick
+  } finally {
+    polling = false;
+  }
+}
+
+async function disconnect() {
+  clearInterval(pollTimer);
+  pollTimer = null;
+  if (pending) pending(null);
+  try { if (reader) await reader.cancel(); } catch {}
+  try { if (readableClosed) await readableClosed; } catch {}
+  try { if (writer) writer.releaseLock(); } catch {}
+  try { if (port) await port.close(); } catch {}
+  port = reader = writer = readableClosed = null;
+  lineBuf = "";
+  device = null;
+  setConnected(false);
+  logLine("Disconnected.", "sys");
+}
+
+async function readLoop() {
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      lineBuf += value;
+      let nl;
+      while ((nl = lineBuf.search(/\r?\n/)) >= 0) {
+        const line = lineBuf.slice(0, nl).trim();
+        lineBuf = lineBuf.slice(lineBuf[nl] === "\r" ? nl + 2 : nl + 1);
+        if (line) onLine(line);
+      }
+    }
+  } catch {
+    // reader cancelled or device unplugged
+  }
+}
+
+function onLine(line) {
+  if (pending) {
+    pending(line);
+  } else {
+    logLine(line, "rx");  // unsolicited output, e.g. the boot banner
+  }
+}
+
+/* Sends one command and resolves with its one-line reply. */
+function request(cmd, { quiet = false } = {}) {
+  const run = () => new Promise((resolve, reject) => {
+    if (!writer) { reject(new Error("Not connected")); return; }
+    const timer = setTimeout(() => {
+      pending = null;
+      reject(new Error(`No reply to "${cmd}"`));
+    }, REPLY_TIMEOUT_MS);
+    pending = line => {
+      clearTimeout(timer);
+      pending = null;
+      if (line === null) { reject(new Error("Disconnected")); return; }
+      if (!quiet) logLine(line, line.startsWith("error") || line.startsWith("unknown") ? "bad" : "rx");
+      resolve(line);
+    };
+    if (!quiet) logLine(`> ${cmd}`, "tx");
+    writer.write(encoder.encode(cmd + "\n")).catch(err => {
+      clearTimeout(timer);
+      pending = null;
+      reject(err);
+    });
+  });
+  const p = queue.then(run, run);
+  queue = p.catch(() => {});
+  return p;
+}
+
+function parseReply(line) {
+  const out = {};
+  for (const part of line.split(/\s+/)) {
+    const i = part.indexOf("=");
+    if (i > 0) out[part.slice(0, i)] = part.slice(i + 1);
+  }
+  return out;
+}
+
+async function refresh({ fillForm = false, quiet = true } = {}) {
+  const line = await request("GET", { quiet });
+  if (!line.startsWith("armed=")) throw new Error(`Unexpected reply to GET: ${line}`);
+  const r = parseReply(line);
+  device = {
+    armed: r.armed === "1",
+    delayUs: Number(r.delay_us),
+    pulseUs: Number(r.pulse_us),
+    count: Number(r.pulse_count),
+    remaining: Number(r.remaining),
+    gate: r.gate === "1",
+    time: new Date(),
+  };
+  if (fillForm) {
+    els.delayUs.value = device.delayUs;
+    els.pulseUs.value = device.pulseUs;
+    els.pulseCount.value = device.count;
+    updateHints();
+  }
+  renderStatus();
+}
+
+/* ---------- user actions ---------- */
+
+async function applyParams(e) {
+  e.preventDefault();
+  if (busy) return;
+  const values = readForm();
+  if (!values) return;
+
+  busy = true;
+  renderStatus();
+  showMsg("", null);
+  try {
+    const steps = [
+      [`SET_DELAY ${values.delayUs}`, "delay_us="],
+      [`SET_PULSE ${values.pulseUs}`, "pulse_us="],
+      [`SET_COUNT ${values.count}`, "pulse_count="],
+    ];
+    for (const [cmd, expect] of steps) {
+      const reply = await request(cmd);
+      if (!reply.startsWith(expect)) {
+        showMsg(reply === "error: armed"
+          ? "The Pico is armed. Parameters can be changed after the last pulse of the run."
+          : `The Pico refused "${cmd}": ${reply}`, "err");
+        return;
+      }
+    }
+    await refresh({ fillForm: true, quiet: false });
+    showMsg("Parameters sent. They are used from the next arm.", "info");
+  } catch (err) {
+    showMsg(err.message, "err");
+  } finally {
+    busy = false;
+    renderStatus();
+  }
+}
+
+async function armDevice() {
+  if (busy) return;
+  if (formDiffersFromDevice()) {
+    showMsg("The fields differ from the values on the Pico. Send them first, or the run uses the values shown under Device status.", "warn");
+    return;
+  }
+  busy = true;
+  renderStatus();
+  showMsg("", null);
+  try {
+    const reply = await request("ARM");
+    if (reply !== "armed") {
+      showMsg(reply === "error: armed" ? "The Pico is already armed." : `Arm failed: ${reply}`, "err");
+    }
+    await refresh({ quiet: true });
+  } catch (err) {
+    showMsg(err.message, "err");
+  } finally {
+    busy = false;
+    renderStatus();
+  }
+}
+
+async function sendManual(e) {
+  e.preventDefault();
+  const cmd = els.cmdInput.value.trim();
+  if (!cmd) return;
+  els.cmdInput.value = "";
+  try {
+    await request(cmd);
+    await refresh({ quiet: true });
+  } catch (err) {
+    logLine(err.message, "bad");
+  }
+}
+
+/* ---------- form helpers ---------- */
+
+function parseUint(input, min, label) {
+  const raw = input.value.trim();
+  if (!/^\d+$/.test(raw)) return { error: `${label} must be a whole number.` };
+  const n = Number(raw);
+  if (n < min || n > UINT32_MAX) return { error: `${label} must be between ${min} and ${UINT32_MAX}.` };
+  return { value: n };
+}
+
+function readForm() {
+  const d = parseUint(els.delayUs, 0, "Delay");
+  const p = parseUint(els.pulseUs, 1, "Gate duration");
+  const c = parseUint(els.pulseCount, 1, "Pulses per run");
+  const error = d.error || p.error || c.error;
+  if (error) { showMsg(error, "err"); return null; }
+  return { delayUs: d.value, pulseUs: p.value, count: c.value };
+}
+
+function formDiffersFromDevice() {
+  if (!device) return false;
+  return Number(els.delayUs.value) !== device.delayUs
+      || Number(els.pulseUs.value) !== device.pulseUs
+      || Number(els.pulseCount.value) !== device.count;
+}
+
+function fmtTime(us) {
+  if (!Number.isFinite(us)) return "–";
+  if (us >= 1e6) return `${(us / 1e6).toLocaleString(undefined, { maximumFractionDigits: 6 })} s`;
+  if (us >= 1e3) return `${(us / 1e3).toLocaleString(undefined, { maximumFractionDigits: 3 })} ms`;
+  return `${us} µs`;
+}
+
+function updateHints() {
+  const d = Number(els.delayUs.value), p = Number(els.pulseUs.value), n = Number(els.pulseCount.value);
+  els.delayHint.textContent = `${fmtTime(d)} after the frame onset`;
+  els.pulseHint.textContent = fmtTime(p);
+
+  const fps = Number(els.frameRate.value);
+  els.timingWarn.hidden = true;
+  if (fps > 0) {
+    const periodUs = 1e6 / fps;
+    const runS = n / fps;
+    els.frameHint.textContent = `Frame period ${fmtTime(Math.round(periodUs))}. A run of ${n} pulses lasts about ${runS.toLocaleString(undefined, { maximumFractionDigits: 2 })} s.`;
+    if (d + p >= periodUs) {
+      els.timingWarn.textContent = `Delay + duration is ${fmtTime(d + p)}, longer than the frame period of ${fmtTime(Math.round(periodUs))}. Frame onsets during a gate are ignored, so not every frame gets a pulse.`;
+      els.timingWarn.hidden = false;
+    }
+  } else {
+    els.frameHint.textContent = "Only used here to check timing; not sent to the Pico.";
+  }
+  try { localStorage.setItem("oam.frameRate", els.frameRate.value); } catch {}
+}
+
+/* ---------- rendering ---------- */
+
+function setConnected(on) {
+  els.connPill.textContent = on ? "Connected" : "Not connected";
+  els.connPill.className = on ? "pill ok" : "pill";
+  els.connectBtn.hidden = on;
+  els.disconnectBtn.hidden = !on;
+  els.cmdInput.disabled = !on;
+  els.cmdBtn.disabled = !on;
+  renderStatus();
+}
+
+function renderStatus() {
+  const connected = !!port;
+  const armed = !!device?.armed;
+
+  if (!connected || !device) {
+    els.armPill.textContent = connected ? "Waiting for reply" : "Unknown";
+    els.armPill.className = connected ? "pill warn" : "pill";
+    els.stateNote.textContent = connected ? "Reading status…" : "Connect to the Pico to read its status.";
+    for (const k of ["roRemaining", "roCount", "roGate", "roDelay", "roPulse", "roTime"]) els[k].textContent = "–";
+    els.roGate.className = "";
+  } else {
+    els.armPill.textContent = armed ? "Armed" : "Disarmed";
+    els.armPill.className = armed ? "pill armed" : "pill ok";
+    els.stateNote.textContent = armed
+      ? "Run in progress. Parameters are locked until the last pulse; the run cannot be stopped."
+      : "Ready. Change parameters or arm a new run.";
+    els.roRemaining.textContent = armed ? device.remaining : "–";
+    els.roCount.textContent = device.count;
+    els.roGate.textContent = device.gate ? "HIGH" : "low";
+    els.roGate.className = device.gate ? "gate-on" : "";
+    els.roDelay.textContent = fmtTime(device.delayUs);
+    els.roPulse.textContent = fmtTime(device.pulseUs);
+    els.roTime.textContent = device.time.toLocaleTimeString();
+  }
+
+  const locked = !connected || !device || armed || busy;
+  els.applyBtn.disabled = locked;
+  els.armBtn.disabled = locked;
+  for (const input of [els.delayUs, els.pulseUs, els.pulseCount]) input.readOnly = armed;
+}
+
+function showMsg(text, kind) {
+  els.formMsg.hidden = !text;
+  els.formMsg.textContent = text;
+  els.formMsg.className = kind ? `msg ${kind}` : "msg";
+}
+
+function logLine(text, cls) {
+  const atBottom = els.log.scrollTop + els.log.clientHeight >= els.log.scrollHeight - 4;
+  const span = document.createElement("span");
+  span.className = cls;
+  span.textContent = `${new Date().toLocaleTimeString()}  ${text}\n`;
+  els.log.appendChild(span);
+  while (els.log.childNodes.length > 500) els.log.removeChild(els.log.firstChild);
+  if (atBottom) els.log.scrollTop = els.log.scrollHeight;
+}
+
+/* ---------- start ---------- */
+
+if (!("serial" in navigator)) {
+  $("unsupported").hidden = false;
+  els.connectBtn.disabled = true;
+} else {
+  navigator.serial.addEventListener("disconnect", e => {
+    if (e.target === port) disconnect();
+  });
+}
+
+try {
+  const fr = localStorage.getItem("oam.frameRate");
+  if (fr) els.frameRate.value = fr;
+} catch {}
+
+els.connectBtn.addEventListener("click", connect);
+els.disconnectBtn.addEventListener("click", disconnect);
+els.form.addEventListener("submit", applyParams);
+els.armBtn.addEventListener("click", armDevice);
+els.cmdForm.addEventListener("submit", sendManual);
+for (const input of [els.delayUs, els.pulseUs, els.pulseCount, els.frameRate]) {
+  input.addEventListener("input", updateHints);
+}
+updateHints();
+renderStatus();
+</script>
+</body>
+</html>

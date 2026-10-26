@@ -172,6 +172,16 @@ stimulus computer is nearby. UDP over WiFi may be added later as an option; if
 so, every command must get a reply (acknowledgement) and use the same command
 names and units.
 
+Every command gets exactly one reply line, so a client can match replies to
+commands by sending one command at a time.
+
+GUI: gui/OAMControl.html, a single-page web app that talks to the Pico over
+USB serial with the Web Serial API (Chrome or Edge, desktop; open the file
+directly, no server). It polls GET four times a second, sends SET_* and ARM,
+locks the parameter fields while armed, and warns when delay + duration is
+longer than the frame period. A MATLAB client can use the same commands with
+serialport().
+
 Planned additions: STATUS (counters, firmware version), SAVE (store config in
 flash), FIRE (manual test pulse, bench only), range checking with an error
 reply, and a small Python client for the stimulus computer (e.g. PsychoPy).

@@ -39,7 +39,9 @@ Line-based text over USB CDC serial (UART stdio is also enabled):
 - `ARM` → `armed`
 - `SET_*` or `ARM` while armed → `error: armed`
 
-Every command gets a reply. New transports (e.g. UDP) must use the same command names and units.
+Every command gets exactly one reply line; clients rely on this to match replies to commands. New transports (e.g. UDP) must use the same command names and units.
+
+GUI: [gui/OAMControl.html](gui/OAMControl.html) uses the Web Serial API (Chrome/Edge) and the commands above. If a command or reply format changes, update the GUI in the same change.
 
 ## Constraints
 - **Core split:** core 1 busy-polls ARM/TRIGGER and times the gate with no interrupts; core 0 handles serial IO. Serial IO must never interrupt or delay core 1. Only core 1 writes the armed state, remaining count and GATE.

@@ -21,7 +21,7 @@
  * itself after the last gate pulse.
  */
 static volatile bool g_armed = false;
-static volatile uint32_t g_delay_us = 50000;
+static volatile uint32_t g_delay_us = 0;
 static volatile uint32_t g_pulse_us = 5000;
 static volatile uint32_t g_pulse_count = 1;  /* gate pulses per arm, >= 1 */
 static volatile uint32_t g_pulses_remaining = 0;
