@@ -18,7 +18,7 @@ Delay and duration are configurable at run time through a command interface
 (see section 6).
 
 
-2. Hardware and pin map
+2. Hardware and pin map:  https://claude.ai/artifact/WCeWWooAtD8uy6jNvMCtzp
 -----------------------
 Current pin assignment (see OAMControl.c). The firmware uses RP2350 GPIO
 numbers (GPn); the physical header pin is listed separately. Pins 3, 8, 13,
