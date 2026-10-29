@@ -121,7 +121,7 @@ form { display: grid; gap: 12px; }
 .field .hint { grid-column: 2; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .inputrow { display: flex; align-items: center; gap: 8px; }
 .inputrow .unit { color: var(--muted); font-size: 13px; width: 2.5em; }
-input[type="text"], input[type="number"] {
+input[type="text"], input[type="number"], select {
   width: 100%;
   min-width: 0;
   padding: 7px 9px;
@@ -132,8 +132,8 @@ input[type="text"], input[type="number"] {
   font: 15px var(--mono);
   font-variant-numeric: tabular-nums;
 }
-input:read-only, input:disabled { color: var(--muted); }
-input:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+input:read-only, input:disabled, select:disabled { color: var(--muted); }
+input:focus-visible, select:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .sep { border: 0; border-top: 1px solid var(--rule); margin: 2px 0; }
 
 .actions { display: flex; flex-wrap: wrap; gap: 10px; }
@@ -147,7 +147,6 @@ button {
   cursor: pointer;
 }
 button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
-button.arm { background: var(--armed); border-color: var(--armed); color: #fff; }
 button:disabled { opacity: 0.45; cursor: not-allowed; }
 
 .msg { margin: 0; font-size: 14px; padding: 8px 10px; border-radius: 6px; }
@@ -204,29 +203,50 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
       </div>
       <div class="readout">
         <div><span>Pulses left</span><strong id="roRemaining">–</strong></div>
+        <div><span>Skipped</span><strong id="roSkipped">–</strong></div>
         <div><span>Pulses per run</span><strong id="roCount">–</strong></div>
-        <div><span>Gate output</span><strong id="roGate">–</strong></div>
       </div>
       <div class="readout">
+        <div><span>Lines</span><strong id="roLines">–</strong></div>
         <div><span>Delay</span><strong id="roDelay">–</strong></div>
         <div><span>Duration</span><strong id="roPulse">–</strong></div>
-        <div><span>Last update</span><strong id="roTime">–</strong></div>
       </div>
-      <p class="note">Status is read with <code>GET</code> four times a second. A run can also be armed by the stimulus computer's ARM input; it shows up here the same way.</p>
+      <div class="readout">
+        <div><span>Scan mode</span><strong id="roScan">–</strong></div>
+        <div><span>PMTs</span><strong id="roPmt">–</strong></div>
+        <div><span>Gate output</span><strong id="roGate">–</strong></div>
+      </div>
+      <h2>Measured from the microscope</h2>
+      <div class="readout">
+        <div><span>Frame period</span><strong id="roFrame">–</strong></div>
+        <div><span>Line period</span><strong id="roLinePeriod">–</strong></div>
+        <div><span>Lines per frame</span><strong id="roFrameLines">–</strong></div>
+      </div>
+      <p class="note">Status is read with <code>GET</code> four times a second (last update <span id="roTime">–</span>). Runs are armed only by the stimulus computer's ARM input. Skipped frames get no gate but count towards the run.</p>
     </section>
 
     <section class="panel" aria-labelledby="paramTitle">
       <h2 id="paramTitle">Run parameters</h2>
       <form id="paramForm" autocomplete="off">
         <div class="field">
+          <label for="scanMode">Scan mode</label>
+          <div class="inputrow"><select id="scanMode"><option value="uni">Unidirectional</option><option value="bi">Bidirectional</option></select><span class="unit"></span></div>
+          <span class="hint" id="scanHint">Up to 512 lines per frame</span>
+        </div>
+        <div class="field">
+          <label for="lineCount">Lines</label>
+          <div class="inputrow"><input type="number" id="lineCount" min="0" max="511" step="1" inputmode="numeric" value="0"><span class="unit">lines</span></div>
+          <span class="hint" id="lineHint">Line onsets to wait for after the frame onset (0–511).</span>
+        </div>
+        <div class="field">
           <label for="delayUs">Delay</label>
           <div class="inputrow"><input type="number" id="delayUs" min="0" max="4294967295" step="1" inputmode="numeric" value="0"><span class="unit">µs</span></div>
-          <span class="hint" id="delayHint">0 ms after the frame onset</span>
+          <span class="hint" id="delayHint">0 µs after the frame onset, then the PMTs close</span>
         </div>
         <div class="field">
           <label for="pulseUs">Gate duration</label>
-          <div class="inputrow"><input type="number" id="pulseUs" min="1" max="4294967295" step="1" inputmode="numeric" value="5000"><span class="unit">µs</span></div>
-          <span class="hint" id="pulseHint">5 ms</span>
+          <div class="inputrow"><input type="number" id="pulseUs" min="1" max="9998" step="1" inputmode="numeric" value="5000"><span class="unit">µs</span></div>
+          <span class="hint" id="pulseHint">5 ms, starting 1 µs after the PMTs close</span>
         </div>
         <div class="field">
           <label for="pulseCount">Pulses per run</label>
@@ -234,16 +254,11 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
           <span class="hint">One gate pulse per frame onset; disarms after the last one.</span>
         </div>
         <hr class="sep">
-        <div class="field">
-          <label for="frameRate">Frame rate</label>
-          <div class="inputrow"><input type="number" id="frameRate" min="0" step="any" inputmode="decimal" placeholder="optional"><span class="unit">Hz</span></div>
-          <span class="hint" id="frameHint">Only used here to check timing; not sent to the Pico.</span>
-        </div>
+        <p class="note" id="frameHint">Frame period not measured yet. Start the microscope to check the timing.</p>
         <p class="msg warn" id="timingWarn" hidden></p>
         <p class="msg" id="formMsg" hidden></p>
         <div class="actions">
           <button class="primary" id="applyBtn" type="submit" disabled>Send to Pico</button>
-          <button class="arm" id="armBtn" type="button" disabled>Arm</button>
         </div>
       </form>
     </section>
@@ -268,16 +283,21 @@ const POLL_MS = 250;
 const REPLY_TIMEOUT_MS = 1000;
 const UINT32_MAX = 4294967295;
 const PICO_USB_VENDOR_ID = 0x2E8A;  // Raspberry Pi
+const SCAN_MAX_LINES = { uni: 512, bi: 256 };
+const PMT_GUARD_US = 1;             // PMTs close this long before the gate and reopen this long after
+const MAX_PULSE_US = 10000 - 2 * PMT_GUARD_US;  // H11706 shutter: closed for at most 10 ms
 
 const $ = id => document.getElementById(id);
 const els = {
   connPill: $("connPill"), connectBtn: $("connectBtn"), disconnectBtn: $("disconnectBtn"),
   armPill: $("armPill"), stateNote: $("stateNote"),
-  roRemaining: $("roRemaining"), roCount: $("roCount"), roGate: $("roGate"),
-  roDelay: $("roDelay"), roPulse: $("roPulse"), roTime: $("roTime"),
+  roRemaining: $("roRemaining"), roSkipped: $("roSkipped"), roCount: $("roCount"),
+  roLines: $("roLines"), roDelay: $("roDelay"), roPulse: $("roPulse"),
+  roScan: $("roScan"), roPmt: $("roPmt"), roGate: $("roGate"),
+  roFrame: $("roFrame"), roLinePeriod: $("roLinePeriod"), roFrameLines: $("roFrameLines"), roTime: $("roTime"),
   form: $("paramForm"), delayUs: $("delayUs"), pulseUs: $("pulseUs"), pulseCount: $("pulseCount"),
-  frameRate: $("frameRate"), delayHint: $("delayHint"), pulseHint: $("pulseHint"), frameHint: $("frameHint"),
-  timingWarn: $("timingWarn"), formMsg: $("formMsg"), applyBtn: $("applyBtn"), armBtn: $("armBtn"),
+  scanMode: $("scanMode"), scanHint: $("scanHint"), lineCount: $("lineCount"), lineHint: $("lineHint"), delayHint: $("delayHint"), pulseHint: $("pulseHint"), frameHint: $("frameHint"),
+  timingWarn: $("timingWarn"), formMsg: $("formMsg"), applyBtn: $("applyBtn"),
   log: $("log"), cmdForm: $("cmdForm"), cmdInput: $("cmdInput"), cmdBtn: $("cmdBtn"),
 };
 
@@ -427,14 +447,24 @@ async function refresh({ fillForm = false, quiet = true } = {}) {
     count: Number(r.pulse_count),
     remaining: Number(r.remaining),
     gate: r.gate === "1",
+    scanMode: r.scanmode,
+    maxLines: Number(r.max_lines),
+    lineCount: Number(r.line_count),
+    pmtClosed: r.pmt === "1",
+    skipped: Number(r.skipped),
+    frameUs: Number(r.frame_us) || 0,     // 0 = not measured
+    lineNs: Number(r.line_ns) || 0,
+    frameLines: Number(r.frame_lines) || 0,
     time: new Date(),
   };
   if (fillForm) {
+    els.lineCount.value = device.lineCount;
     els.delayUs.value = device.delayUs;
     els.pulseUs.value = device.pulseUs;
     els.pulseCount.value = device.count;
-    updateHints();
+    if (device.scanMode) els.scanMode.value = device.scanMode;
   }
+  updateHints();
   renderStatus();
 }
 
@@ -450,7 +480,13 @@ async function applyParams(e) {
   renderStatus();
   showMsg("", null);
   try {
+    // The line count must stay below the scan mode's limit at every step:
+    // switching to bi lowers the limit, so set the lines first; switching to
+    // uni raises it, so set the scan mode first.
+    const scanStep = [`SET_SCANMODE ${values.scanMode}`, "scanmode="];
+    const lineStep = [`SET_LINES ${values.lineCount}`, "line_count="];
     const steps = [
+      ...(values.scanMode === "bi" ? [lineStep, scanStep] : [scanStep, lineStep]),
       [`SET_DELAY ${values.delayUs}`, "delay_us="],
       [`SET_PULSE ${values.pulseUs}`, "pulse_us="],
       [`SET_COUNT ${values.count}`, "pulse_count="],
@@ -474,29 +510,6 @@ async function applyParams(e) {
   }
 }
 
-async function armDevice() {
-  if (busy) return;
-  if (formDiffersFromDevice()) {
-    showMsg("The fields differ from the values on the Pico. Send them first, or the run uses the values shown under Device status.", "warn");
-    return;
-  }
-  busy = true;
-  renderStatus();
-  showMsg("", null);
-  try {
-    const reply = await request("ARM");
-    if (reply !== "armed") {
-      showMsg(reply === "error: armed" ? "The Pico is already armed." : `Arm failed: ${reply}`, "err");
-    }
-    await refresh({ quiet: true });
-  } catch (err) {
-    showMsg(err.message, "err");
-  } finally {
-    busy = false;
-    renderStatus();
-  }
-}
-
 async function sendManual(e) {
   e.preventDefault();
   const cmd = els.cmdInput.value.trim();
@@ -512,28 +525,23 @@ async function sendManual(e) {
 
 /* ---------- form helpers ---------- */
 
-function parseUint(input, min, label) {
+function parseUint(input, min, label, max = UINT32_MAX) {
   const raw = input.value.trim();
   if (!/^\d+$/.test(raw)) return { error: `${label} must be a whole number.` };
   const n = Number(raw);
-  if (n < min || n > UINT32_MAX) return { error: `${label} must be between ${min} and ${UINT32_MAX}.` };
+  if (n < min || n > max) return { error: `${label} must be between ${min} and ${max}.` };
   return { value: n };
 }
 
 function readForm() {
+  const scanMode = els.scanMode.value;
+  const l = parseUint(els.lineCount, 0, "Lines", SCAN_MAX_LINES[scanMode] - 1);
   const d = parseUint(els.delayUs, 0, "Delay");
-  const p = parseUint(els.pulseUs, 1, "Gate duration");
+  const p = parseUint(els.pulseUs, 1, "Gate duration", MAX_PULSE_US);
   const c = parseUint(els.pulseCount, 1, "Pulses per run");
-  const error = d.error || p.error || c.error;
+  const error = l.error || d.error || p.error || c.error;
   if (error) { showMsg(error, "err"); return null; }
-  return { delayUs: d.value, pulseUs: p.value, count: c.value };
-}
-
-function formDiffersFromDevice() {
-  if (!device) return false;
-  return Number(els.delayUs.value) !== device.delayUs
-      || Number(els.pulseUs.value) !== device.pulseUs
-      || Number(els.pulseCount.value) !== device.count;
+  return { scanMode, lineCount: l.value, delayUs: d.value, pulseUs: p.value, count: c.value };
 }
 
 function fmtTime(us) {
@@ -544,24 +552,36 @@ function fmtTime(us) {
 }
 
 function updateHints() {
-  const d = Number(els.delayUs.value), p = Number(els.pulseUs.value), n = Number(els.pulseCount.value);
-  els.delayHint.textContent = `${fmtTime(d)} after the frame onset`;
-  els.pulseHint.textContent = fmtTime(p);
+  const maxLines = SCAN_MAX_LINES[els.scanMode.value];
+  const l = Number(els.lineCount.value), d = Number(els.delayUs.value), p = Number(els.pulseUs.value), n = Number(els.pulseCount.value);
+  els.lineCount.max = maxLines - 1;
+  els.scanHint.textContent = `Up to ${maxLines} lines per frame`;
+  els.lineHint.textContent = `Line onsets to wait for after the frame onset (0–${maxLines - 1}).`;
+  els.delayHint.textContent = `${fmtTime(d)} after ${l > 0 ? `line onset ${l}` : "the frame onset"}, then the PMTs close`;
+  els.pulseHint.textContent = `${fmtTime(p)}, starting ${PMT_GUARD_US} µs after the PMTs close`;
 
-  const fps = Number(els.frameRate.value);
+  // Timing is checked against the frame and line periods the Pico measures.
+  const frameUs = device?.frameUs || 0;
   els.timingWarn.hidden = true;
-  if (fps > 0) {
-    const periodUs = 1e6 / fps;
-    const runS = n / fps;
-    els.frameHint.textContent = `Frame period ${fmtTime(Math.round(periodUs))}. A run of ${n} pulses lasts about ${runS.toLocaleString(undefined, { maximumFractionDigits: 2 })} s.`;
-    if (d + p >= periodUs) {
-      els.timingWarn.textContent = `Delay + duration is ${fmtTime(d + p)}, longer than the frame period of ${fmtTime(Math.round(periodUs))}. Frame onsets during a gate are ignored, so not every frame gets a pulse.`;
+  if (frameUs > 0) {
+    const lineNs = device.lineNs;
+    const beforeGateUs = Math.round(l * lineNs / 1000 + d + PMT_GUARD_US);
+    const maxPulseUs = Math.min(frameUs - 2 * PMT_GUARD_US - 1, MAX_PULSE_US);
+    const period = fmtTime(frameUs);
+    const runS = n * frameUs / 1e6;
+    els.frameHint.textContent = `Measured frame period ${period}: gate duration at most ${fmtTime(maxPulseUs)}. A run of ${n} pulses lasts about ${runS.toLocaleString(undefined, { maximumFractionDigits: 2 })} s.`;
+    if (p > maxPulseUs) {
+      els.timingWarn.textContent = `Gate duration + 2 µs PMT guards must be shorter than the frame period of ${period} and at most 10 ms (shutter limit), so the duration can be at most ${fmtTime(maxPulseUs)}. The Pico will refuse this value.`;
+      els.timingWarn.hidden = false;
+    } else if (beforeGateUs >= frameUs) {
+      els.timingWarn.textContent = lineNs > 0
+        ? `Lines + delay takes about ${fmtTime(beforeGateUs)}, not shorter than the frame period of ${period}. The Pico will refuse this delay; if it gets through, each frame times out at the next frame onset and gets no gate.`
+        : `Delay is not shorter than the frame period of ${period}. The Pico will refuse it.`;
       els.timingWarn.hidden = false;
     }
   } else {
-    els.frameHint.textContent = "Only used here to check timing; not sent to the Pico.";
+    els.frameHint.textContent = `Frame period not measured yet. Start the microscope to check the timing. Gate duration at most ${fmtTime(MAX_PULSE_US)} (shutter limit).`;
   }
-  try { localStorage.setItem("oam.frameRate", els.frameRate.value); } catch {}
 }
 
 /* ---------- rendering ---------- */
@@ -584,14 +604,16 @@ function renderStatus() {
     els.armPill.textContent = connected ? "Waiting for reply" : "Unknown";
     els.armPill.className = connected ? "pill warn" : "pill";
     els.stateNote.textContent = connected ? "Reading status…" : "Connect to the Pico to read its status.";
-    for (const k of ["roRemaining", "roCount", "roGate", "roDelay", "roPulse", "roTime"]) els[k].textContent = "–";
+    for (const k of ["roRemaining", "roSkipped", "roCount", "roLines", "roDelay", "roPulse", "roScan", "roPmt", "roGate",
+                     "roFrame", "roLinePeriod", "roFrameLines", "roTime"]) els[k].textContent = "–";
     els.roGate.className = "";
+    els.roPmt.className = "";
   } else {
     els.armPill.textContent = armed ? "Armed" : "Disarmed";
     els.armPill.className = armed ? "pill armed" : "pill ok";
     els.stateNote.textContent = armed
       ? "Run in progress. Parameters are locked until the last pulse; the run cannot be stopped."
-      : "Ready. Change parameters or arm a new run.";
+      : "Ready. Change parameters; the next run starts on the ARM input.";
     els.roRemaining.textContent = armed ? device.remaining : "–";
     els.roCount.textContent = device.count;
     els.roGate.textContent = device.gate ? "HIGH" : "low";
@@ -599,12 +621,20 @@ function renderStatus() {
     els.roDelay.textContent = fmtTime(device.delayUs);
     els.roPulse.textContent = fmtTime(device.pulseUs);
     els.roTime.textContent = device.time.toLocaleTimeString();
+    els.roScan.textContent = device.scanMode ? `${device.scanMode} (${device.maxLines})` : "–";
+    els.roLines.textContent = Number.isFinite(device.lineCount) ? device.lineCount : "–";
+    els.roPmt.textContent = device.pmtClosed ? "CLOSED" : "open";
+    els.roPmt.className = device.pmtClosed ? "gate-on" : "";
+    els.roSkipped.textContent = Number.isFinite(device.skipped) ? device.skipped : "–";
+    els.roFrame.textContent = device.frameUs ? fmtTime(device.frameUs) : "not measured";
+    els.roLinePeriod.textContent = device.lineNs ? `${(device.lineNs / 1000).toLocaleString(undefined, { maximumFractionDigits: 2 })} µs` : "–";
+    els.roFrameLines.textContent = device.frameLines || "–";
   }
 
   const locked = !connected || !device || armed || busy;
   els.applyBtn.disabled = locked;
-  els.armBtn.disabled = locked;
-  for (const input of [els.delayUs, els.pulseUs, els.pulseCount]) input.readOnly = armed;
+  for (const input of [els.lineCount, els.delayUs, els.pulseUs, els.pulseCount]) input.readOnly = armed;
+  els.scanMode.disabled = armed;
 }
 
 function showMsg(text, kind) {
@@ -634,17 +664,11 @@ if (!("serial" in navigator)) {
   });
 }
 
-try {
-  const fr = localStorage.getItem("oam.frameRate");
-  if (fr) els.frameRate.value = fr;
-} catch {}
-
 els.connectBtn.addEventListener("click", connect);
 els.disconnectBtn.addEventListener("click", disconnect);
 els.form.addEventListener("submit", applyParams);
-els.armBtn.addEventListener("click", armDevice);
 els.cmdForm.addEventListener("submit", sendManual);
-for (const input of [els.delayUs, els.pulseUs, els.pulseCount, els.frameRate]) {
+for (const input of [els.scanMode, els.lineCount, els.delayUs, els.pulseUs, els.pulseCount]) {
   input.addEventListener("input", updateHints);
 }
 updateHints();
