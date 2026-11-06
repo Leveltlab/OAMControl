@@ -8,10 +8,11 @@ of a Coherent Monaco laser with microsecond precision through the laser's
 Gate 1 input.
 
 The Pico 2 W receives three TTL signals on three input pins: two from a 2-photon
-microscope and one from the stimulus/experimental control computer. 
-The stimulus TTL arms the Pico. Once armed, TTLs from the microscope 
-(frame and line onsets) determine the onset delay and uptime of a TTL that is
-sent to the Gate 1 input of the Monaco laser.
+Neurolabware microscope (Scanbox) and one from the stimulus/experimental control computer. 
+The stimulus control computer sends a TTL to arm the Pico application. Once armed, 
+TTLs from the microscope (frame and line onsets) determine the onset delay and uptime of a TTL that is
+sent to the Gate 1 input of the Monaco laser and to the Scanbox computer for logging.
+
 After a frame onset, the Pico waits for a set number of line onsets and then
 a delay. It then closes the PMTs, and 1 us later the gate output goes high
 for a configured duration. The Monaco laser emits pulses as long as Gate 1 is
@@ -21,8 +22,10 @@ Scan mode, line count, delay, duration and pulse count are configurable at
 run time through a command interface (see section 6).
 
 
-2. Hardware and pin map:  https://claude.ai/artifact/WCeWWooAtD8uy6jNvMCtzp
+2. Hardware and pin map: 
 -----------------------
+https://claude.ai/artifact/WCeWWooAtD8uy6jNvMCtzp
+
 Current pin assignment (see OAMControl.c). The firmware uses RP2350 GPIO
 numbers (GPn); the physical header pin is listed separately. Pins 3, 8, 13,
 18, 23, 28, 33 and 38 are GND.
