@@ -26,15 +26,15 @@ GPIO numbers are RP2350 GPIOs (what the SDK uses), not physical header pins.
 - A rising edge on the ARM input arms the controller and latches line count, delay, duration and pulse count. Arming is only possible through the ARM input; there is no arm command.
 - Each rising edge on TRIGGER (frame onset) while armed starts the sequence: wait for `line_count` LINE rising edges (default 0) → delay (default 0, from the last LINE edge or from TRIGGER if 0) → PMT high → 1 µs → GATE high for the duration → GATE low → 1 µs → PMT low. One gate pulse per trigger.
 - `line_count` must be < the scan mode's lines per frame: 512 for `uni` (default), 256 for `bi`.
-- The controller disarms by itself after `pulse_count` frames. A skipped frame gets no gate but counts, so a run always ends; `GET` reports `skipped`.
-- **Timeout:** lines + delay is limited to one frame interval. A TRIGGER before GATE high times out the current frame (skipped, no gate) and is itself ignored.
-- **Duration cap:** duration + 2 µs < frame period, and duration ≤ 9998 µs (shutter closed ≤ 10 ms). `SET_PULSE` rejects longer values (the frame check only when a frame period is measured); at run time each gate is cut to both limits.
+- The controller disarms by itself after `pulse_count` gate pulses.
+- **Sequence within its frame (Q14):** lines + delay + duration + 2 µs < frame period, so the gate ends and the PMTs reopen before the next TRIGGER. `SET_LINES`, `SET_DELAY` and `SET_PULSE` enforce this when a frame period is measured (lines estimated as `line_count` × `line_ns`). A SET that does not lengthen the sequence is always accepted. No timeout, no carried-over or skipped frames.
+- **Shutter cap:** duration ≤ 9998 µs (shutter closed ≤ 10 ms), checked by `SET_PULSE` and applied again at arm.
 - **Measurement:** core 1 timestamps every TRIGGER and LINE edge, armed or not, giving `frame_us` (last TRIGGER interval), `line_ns` (mean LINE interval in the last frame) and `frame_lines`. After 2 s without TRIGGER they read 0 (not measured), and `SET_DELAY`/`SET_PULSE` are not checked.
 - The PMT guard is a fixed 1 µs (the PMTs close within 1 µs).
 - An armed run cannot be stopped, restarted or changed: no reset command, ARM edges ignored while armed, `SET_*` rejected while armed.
 - Triggers while disarmed are ignored. No glitch filtering.
-- A trigger during a sequence never restarts it. Before GATE high it times out the current frame (see above). From GATE high until the PMTs open, it starts the next frame: its LINE edges are counted during the current gate, and its sequence runs after the current one ends, so sequences never overlap. If that frame's PMT close time has already passed by then (only through jitter, given the cap), it is skipped.
-- The behaviour decisions are recorded in the spec (Q1–Q13). Do not change them in code without asking.
+- A trigger during a sequence is ignored (measured only; it starts no sequence and is not counted). With the frame check this only happens if the timing was set while the microscope was stopped or the frame rate changed afterwards.
+- The behaviour decisions are recorded in the spec (Q1–Q14). Do not change them in code without asking.
 
 ## Units
 Microseconds everywhere: delay, duration, and all timing command parameters. Line counts are plain integers. The one exception is the measured line period, `line_ns`, in nanoseconds so line_count × line period stays accurate.
@@ -43,10 +43,11 @@ Microseconds everywhere: delay, duration, and all timing command parameters. Lin
 Line-based text over USB CDC serial (UART stdio is also enabled):
 - `SET_SCANMODE <uni|bi>` → `scanmode=<uni|bi> max_lines=<512|256>` (else `error: scanmode must be uni or bi`; `bi` with `line_count >= 256` → `error: line_count must be < 256 for bi`)
 - `SET_LINES <n>` → `line_count=<n>` (n < max_lines, else `error: line_count must be < <max_lines>`)
-- `SET_DELAY <us>` → `delay_us=<us>` (when measured: lines × line period + delay + 1 µs must be < frame_us, else `error: lines + delay must be < frame_us (<us>)`)
-- `SET_PULSE <us>` → `pulse_us=<us>` (> 9998 → `error: pulse_us must be <= 9998`; when measured: pulse + 2 µs must be < frame_us, else `error: pulse_us + 2 must be < frame_us (<us>)`)
-- `SET_COUNT <n>` → `pulse_count=<n>` (frames per run, n >= 1, else `error: count must be >= 1`)
-- `GET` → `armed=<0|1> delay_us=<us> pulse_us=<us> pulse_count=<n> remaining=<n> gate=<0|1> scanmode=<uni|bi> max_lines=<n> line_count=<n> pmt=<0|1> skipped=<n> frame_us=<us> line_ns=<ns> frame_lines=<n>` (`pmt=1` = closed; measured values 0 = not measured)
+- `SET_DELAY <us>` → `delay_us=<us>`
+- `SET_PULSE <us>` → `pulse_us=<us>` (> 9998 → `error: pulse_us must be <= 9998`)
+- `SET_LINES`, `SET_DELAY`, `SET_PULSE`: when measured, a value that makes lines × line period + delay + pulse + 2 µs ≥ frame_us (and lengthens the sequence) → `error: lines + delay + pulse + 2 must be < frame_us (<us>)`
+- `SET_COUNT <n>` → `pulse_count=<n>` (gate pulses per run, n >= 1, else `error: count must be >= 1`)
+- `GET` → `armed=<0|1> delay_us=<us> pulse_us=<us> pulse_count=<n> remaining=<n> gate=<0|1> scanmode=<uni|bi> max_lines=<n> line_count=<n> pmt=<0|1> frame_us=<us> line_ns=<ns> frame_lines=<n>` (`pmt=1` = closed; measured values 0 = not measured)
 - `SET_*` while armed → `error: armed`
 
 Every command gets exactly one reply line; clients rely on this to match replies to commands. New transports (e.g. UDP) must use the same command names and units.
@@ -61,7 +62,7 @@ GUI: [gui/OAMControl.html](gui/OAMControl.html) uses the Web Serial API (Chrome/
 ## Safety
 - GATE is low by default: at boot, reset, during flashing and after a crash (external pull-down, watchdog).
 - PMTs are closed whenever GATE is high: PMT rises before GATE and falls only after GATE is low. PMT is low (open) at boot (external pull-down).
-- Duration cap in firmware: duration + 2 µs < measured frame period and ≤ 10 ms (shutter limit), checked by `SET_PULSE` and enforced on every gate.
+- Duration cap in firmware: ≤ 9998 µs (shutter closed ≤ 10 ms), checked by `SET_PULSE` and applied again at arm. The frame check keeps each gate inside its own frame.
 - Reject malformed or out-of-range values with an error reply; never apply a partially parsed value.
 
 ## Build and validation

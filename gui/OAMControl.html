@@ -111,7 +111,6 @@ h2 {
 .readout div { display: grid; gap: 2px; }
 .readout span { font-size: 12px; color: var(--muted); }
 .readout strong { font: 600 20px/1.2 var(--mono); font-variant-numeric: tabular-nums; }
-.gate-on { color: var(--armed); }
 .note { font-size: 13px; color: var(--muted); margin: 0; }
 
 /* form */
@@ -203,26 +202,13 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
       </div>
       <div class="readout">
         <div><span>Pulses left</span><strong id="roRemaining">–</strong></div>
-        <div><span>Skipped</span><strong id="roSkipped">–</strong></div>
-        <div><span>Pulses per run</span><strong id="roCount">–</strong></div>
-      </div>
-      <div class="readout">
-        <div><span>Lines</span><strong id="roLines">–</strong></div>
-        <div><span>Delay</span><strong id="roDelay">–</strong></div>
-        <div><span>Duration</span><strong id="roPulse">–</strong></div>
-      </div>
-      <div class="readout">
-        <div><span>Scan mode</span><strong id="roScan">–</strong></div>
-        <div><span>PMTs</span><strong id="roPmt">–</strong></div>
-        <div><span>Gate output</span><strong id="roGate">–</strong></div>
       </div>
       <h2>Measured from the microscope</h2>
       <div class="readout">
         <div><span>Frame period</span><strong id="roFrame">–</strong></div>
         <div><span>Line period</span><strong id="roLinePeriod">–</strong></div>
-        <div><span>Lines per frame</span><strong id="roFrameLines">–</strong></div>
       </div>
-      <p class="note">Status is read with <code>GET</code> four times a second (last update <span id="roTime">–</span>). Runs are armed only by the stimulus computer's ARM input. Skipped frames get no gate but count towards the run.</p>
+      <p class="note">Status is read with <code>GET</code> four times a second (last update <span id="roTime">–</span>). Runs are armed only by the stimulus computer's ARM input.</p>
     </section>
 
     <section class="panel" aria-labelledby="paramTitle">
@@ -291,10 +277,8 @@ const $ = id => document.getElementById(id);
 const els = {
   connPill: $("connPill"), connectBtn: $("connectBtn"), disconnectBtn: $("disconnectBtn"),
   armPill: $("armPill"), stateNote: $("stateNote"),
-  roRemaining: $("roRemaining"), roSkipped: $("roSkipped"), roCount: $("roCount"),
-  roLines: $("roLines"), roDelay: $("roDelay"), roPulse: $("roPulse"),
-  roScan: $("roScan"), roPmt: $("roPmt"), roGate: $("roGate"),
-  roFrame: $("roFrame"), roLinePeriod: $("roLinePeriod"), roFrameLines: $("roFrameLines"), roTime: $("roTime"),
+  roRemaining: $("roRemaining"),
+  roFrame: $("roFrame"), roLinePeriod: $("roLinePeriod"), roTime: $("roTime"),
   form: $("paramForm"), delayUs: $("delayUs"), pulseUs: $("pulseUs"), pulseCount: $("pulseCount"),
   scanMode: $("scanMode"), scanHint: $("scanHint"), lineCount: $("lineCount"), lineHint: $("lineHint"), delayHint: $("delayHint"), pulseHint: $("pulseHint"), frameHint: $("frameHint"),
   timingWarn: $("timingWarn"), formMsg: $("formMsg"), applyBtn: $("applyBtn"),
@@ -446,12 +430,9 @@ async function refresh({ fillForm = false, quiet = true } = {}) {
     pulseUs: Number(r.pulse_us),
     count: Number(r.pulse_count),
     remaining: Number(r.remaining),
-    gate: r.gate === "1",
     scanMode: r.scanmode,
     maxLines: Number(r.max_lines),
     lineCount: Number(r.line_count),
-    pmtClosed: r.pmt === "1",
-    skipped: Number(r.skipped),
     frameUs: Number(r.frame_us) || 0,     // 0 = not measured
     lineNs: Number(r.line_ns) || 0,
     frameLines: Number(r.frame_lines) || 0,
@@ -480,17 +461,32 @@ async function applyParams(e) {
   renderStatus();
   showMsg("", null);
   try {
+    // The Pico checks every SET against the whole sequence (lines + delay +
+    // gate) with the other values it holds at that moment. Changes that
+    // shorten the sequence go first, so each step stays within the frame
+    // whenever the final values do.
+    const lineNs = device?.lineNs || 0;
+    const timing = [
+      { step: [`SET_LINES ${values.lineCount}`, "line_count="], lines: true,
+        growNs: (values.lineCount - (device?.lineCount ?? 0)) * lineNs },
+      { step: [`SET_DELAY ${values.delayUs}`, "delay_us="],
+        growNs: (values.delayUs - (device?.delayUs ?? 0)) * 1000 },
+      { step: [`SET_PULSE ${values.pulseUs}`, "pulse_us="],
+        growNs: (values.pulseUs - (device?.pulseUs ?? 0)) * 1000 },
+    ].sort((a, b) => a.growNs - b.growNs);
+
     // The line count must stay below the scan mode's limit at every step:
     // switching to bi lowers the limit, so set the lines first; switching to
     // uni raises it, so set the scan mode first.
     const scanStep = [`SET_SCANMODE ${values.scanMode}`, "scanmode="];
-    const lineStep = [`SET_LINES ${values.lineCount}`, "line_count="];
-    const steps = [
-      ...(values.scanMode === "bi" ? [lineStep, scanStep] : [scanStep, lineStep]),
-      [`SET_DELAY ${values.delayUs}`, "delay_us="],
-      [`SET_PULSE ${values.pulseUs}`, "pulse_us="],
-      [`SET_COUNT ${values.count}`, "pulse_count="],
-    ];
+    const steps = [];
+    for (const t of timing) {
+      if (t.lines && values.scanMode !== "bi") steps.push(scanStep);
+      steps.push(t.step);
+      if (t.lines && values.scanMode === "bi") steps.push(scanStep);
+    }
+    steps.push([`SET_COUNT ${values.count}`, "pulse_count="]);
+
     for (const [cmd, expect] of steps) {
       const reply = await request(cmd);
       if (!reply.startsWith(expect)) {
@@ -564,19 +560,15 @@ function updateHints() {
   const frameUs = device?.frameUs || 0;
   els.timingWarn.hidden = true;
   if (frameUs > 0) {
-    const lineNs = device.lineNs;
-    const beforeGateUs = Math.round(l * lineNs / 1000 + d + PMT_GUARD_US);
-    const maxPulseUs = Math.min(frameUs - 2 * PMT_GUARD_US - 1, MAX_PULSE_US);
+    // Same estimate as the firmware: lines x measured line period, rounded down.
+    const linesUs = Math.floor(l * device.lineNs / 1000);
+    const sequenceUs = linesUs + d + p + 2 * PMT_GUARD_US;
+    const maxPulseUs = Math.max(0, Math.min(frameUs - 1 - linesUs - d - 2 * PMT_GUARD_US, MAX_PULSE_US));
     const period = fmtTime(frameUs);
     const runS = n * frameUs / 1e6;
-    els.frameHint.textContent = `Measured frame period ${period}: gate duration at most ${fmtTime(maxPulseUs)}. A run of ${n} pulses lasts about ${runS.toLocaleString(undefined, { maximumFractionDigits: 2 })} s.`;
-    if (p > maxPulseUs) {
-      els.timingWarn.textContent = `Gate duration + 2 µs PMT guards must be shorter than the frame period of ${period} and at most 10 ms (shutter limit), so the duration can be at most ${fmtTime(maxPulseUs)}. The Pico will refuse this value.`;
-      els.timingWarn.hidden = false;
-    } else if (beforeGateUs >= frameUs) {
-      els.timingWarn.textContent = lineNs > 0
-        ? `Lines + delay takes about ${fmtTime(beforeGateUs)}, not shorter than the frame period of ${period}. The Pico will refuse this delay; if it gets through, each frame times out at the next frame onset and gets no gate.`
-        : `Delay is not shorter than the frame period of ${period}. The Pico will refuse it.`;
+    els.frameHint.textContent = `Measured frame period ${period}. Lines + delay + gate + 2 µs PMT guards take ${fmtTime(sequenceUs)}; with these lines and delay the gate can last at most ${fmtTime(maxPulseUs)}. A run of ${n} pulses lasts about ${runS.toLocaleString(undefined, { maximumFractionDigits: 2 })} s.`;
+    if (sequenceUs >= frameUs) {
+      els.timingWarn.textContent = `Lines + delay + gate + 2 µs PMT guards take ${fmtTime(sequenceUs)}, not shorter than the frame period of ${period}, so the gate would not end within its own frame. The Pico will refuse these values.`;
       els.timingWarn.hidden = false;
     }
   } else {
@@ -604,10 +596,7 @@ function renderStatus() {
     els.armPill.textContent = connected ? "Waiting for reply" : "Unknown";
     els.armPill.className = connected ? "pill warn" : "pill";
     els.stateNote.textContent = connected ? "Reading status…" : "Connect to the Pico to read its status.";
-    for (const k of ["roRemaining", "roSkipped", "roCount", "roLines", "roDelay", "roPulse", "roScan", "roPmt", "roGate",
-                     "roFrame", "roLinePeriod", "roFrameLines", "roTime"]) els[k].textContent = "–";
-    els.roGate.className = "";
-    els.roPmt.className = "";
+    for (const k of ["roRemaining", "roFrame", "roLinePeriod", "roTime"]) els[k].textContent = "–";
   } else {
     els.armPill.textContent = armed ? "Armed" : "Disarmed";
     els.armPill.className = armed ? "pill armed" : "pill ok";
@@ -615,20 +604,9 @@ function renderStatus() {
       ? "Run in progress. Parameters are locked until the last pulse; the run cannot be stopped."
       : "Ready. Change parameters; the next run starts on the ARM input.";
     els.roRemaining.textContent = armed ? device.remaining : "–";
-    els.roCount.textContent = device.count;
-    els.roGate.textContent = device.gate ? "HIGH" : "low";
-    els.roGate.className = device.gate ? "gate-on" : "";
-    els.roDelay.textContent = fmtTime(device.delayUs);
-    els.roPulse.textContent = fmtTime(device.pulseUs);
     els.roTime.textContent = device.time.toLocaleTimeString();
-    els.roScan.textContent = device.scanMode ? `${device.scanMode} (${device.maxLines})` : "–";
-    els.roLines.textContent = Number.isFinite(device.lineCount) ? device.lineCount : "–";
-    els.roPmt.textContent = device.pmtClosed ? "CLOSED" : "open";
-    els.roPmt.className = device.pmtClosed ? "gate-on" : "";
-    els.roSkipped.textContent = Number.isFinite(device.skipped) ? device.skipped : "–";
     els.roFrame.textContent = device.frameUs ? fmtTime(device.frameUs) : "not measured";
     els.roLinePeriod.textContent = device.lineNs ? `${(device.lineNs / 1000).toLocaleString(undefined, { maximumFractionDigits: 2 })} µs` : "–";
-    els.roFrameLines.textContent = device.frameLines || "–";
   }
 
   const locked = !connected || !device || armed || busy;
