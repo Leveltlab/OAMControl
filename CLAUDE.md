@@ -25,6 +25,7 @@ GPIO numbers are RP2350 GPIOs (what the SDK uses), not physical header pins.
 ## Timing behaviour (current)
 - A rising edge on the ARM input arms the controller and latches line count, delay, duration and pulse count. Arming is only possible through the ARM input; there is no arm command.
 - Each rising edge on TRIGGER (frame onset) while armed starts the sequence: wait for `line_count` LINE rising edges (default 0) → delay (default 0, from the last LINE edge or from TRIGGER if 0) → PMT high → 1 µs → GATE high for the duration → GATE low → 1 µs → PMT low. One gate pulse per trigger.
+- Line 1 starts with the frame: its LINE edge coincides with TRIGGER and is never counted (a LINE edge ≤ 2 µs after TRIGGER is taken as line 1). `line_count = N` waits N whole lines, i.e. for the onset of line N + 1; the delay starts there.
 - `line_count` must be < the scan mode's lines per frame: 512 for `uni` (default), 256 for `bi`.
 - The controller disarms by itself after `pulse_count` gate pulses.
 - **Sequence within its frame (Q14):** lines + delay + duration + 2 µs < frame period, so the gate ends and the PMTs reopen before the next TRIGGER. `SET_LINES`, `SET_DELAY` and `SET_PULSE` enforce this when a frame period is measured (lines estimated as `line_count` × `line_ns`). A SET that does not lengthen the sequence is always accepted. No timeout, no carried-over or skipped frames.

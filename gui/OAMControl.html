@@ -222,7 +222,7 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
         <div class="field">
           <label for="lineCount">Lines</label>
           <div class="inputrow"><input type="number" id="lineCount" min="0" max="511" step="1" inputmode="numeric" value="0"><span class="unit">lines</span></div>
-          <span class="hint" id="lineHint">Line onsets to wait for after the frame onset (0–511).</span>
+          <span class="hint" id="lineHint">Whole lines to wait after the frame onset (0–511); line 1 starts with the frame.</span>
         </div>
         <div class="field">
           <label for="delayUs">Delay</label>
@@ -552,8 +552,8 @@ function updateHints() {
   const l = Number(els.lineCount.value), d = Number(els.delayUs.value), p = Number(els.pulseUs.value), n = Number(els.pulseCount.value);
   els.lineCount.max = maxLines - 1;
   els.scanHint.textContent = `Up to ${maxLines} lines per frame`;
-  els.lineHint.textContent = `Line onsets to wait for after the frame onset (0–${maxLines - 1}).`;
-  els.delayHint.textContent = `${fmtTime(d)} after ${l > 0 ? `line onset ${l}` : "the frame onset"}, then the PMTs close`;
+  els.lineHint.textContent = `Whole lines to wait after the frame onset (0–${maxLines - 1}); line 1 starts with the frame.`;
+  els.delayHint.textContent = `${fmtTime(d)} after ${l > 0 ? `the onset of line ${l + 1}` : "the frame onset"}, then the PMTs close`;
   els.pulseHint.textContent = `${fmtTime(p)}, starting ${PMT_GUARD_US} µs after the PMTs close`;
 
   // Timing is checked against the frame and line periods the Pico measures.

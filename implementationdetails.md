@@ -121,14 +121,21 @@ Current implementation:
     controller.
   - Each rising edge on TRIGGER (frame onset), while armed, starts this
     sequence:
-      1. wait for line_count rising edges on LINE (default 0: skip);
-      2. wait for the delay (default 0), counted from the last of those
-         LINE edges, or from the TRIGGER edge when line_count is 0;
+      1. wait for line_count whole lines (default 0: skip), i.e. for the
+         onset of line line_count + 1;
+      2. wait for the delay (default 0), counted from that line onset,
+         or from the TRIGGER edge when line_count is 0;
       3. PMT high (PMTs closed);
       4. after 1 us, GATE high for the duration, then GATE low;
       5. after 1 us, PMT low (PMTs open).
+  - The first line onset of a frame (line 1) coincides with the frame
+    onset (seen on the oscilloscope). It is never counted: a LINE edge up
+    to 2 us after TRIGGER is taken as line 1, so whether it counts does
+    not depend on which edge the polling loop sees first. A frame of 512
+    lines therefore has 511 countable line onsets after TRIGGER.
   - line_count must be smaller than the scan mode's lines per frame:
-    0..511 for uni (default), 0..255 for bi.
+    0..511 for uni (default), 0..255 for bi; line_count = 511 waits for
+    the onset of the last line (512).
   - The controller disarms by itself after pulse_count gate pulses
     (SET_COUNT, >= 1, default 1).
   - An armed run cannot be stopped, restarted or changed: ARM edges are
@@ -251,7 +258,7 @@ Current: line-based text commands over USB CDC serial (and UART stdio):
 
   SET_SCANMODE <uni|bi>
                    -> scanmode=<uni|bi> max_lines=<512|256>
-  SET_LINES <n>    -> line_count=<n>    (LINE edges after TRIGGER, n < max_lines)
+  SET_LINES <n>    -> line_count=<n>    (whole lines after TRIGGER, n < max_lines)
   SET_DELAY <us>   -> delay_us=<us>
   SET_PULSE <us>   -> pulse_us=<us>
   SET_COUNT <n>    -> pulse_count=<n>   (gate pulses per arm, n >= 1)
@@ -329,8 +336,10 @@ reply, and a small Python client for the stimulus computer (e.g. PsychoPy).
 Measure with an oscilloscope on TRIGGER, LINE, PMT and GATE (and the laser
 photodiode or Sync output where available):
   - 1000 triggers at minimum delay, maximum delay and maximum trigger rate.
-  - Line counting: with line_count = N, the delay starts at the Nth LINE
-    edge after TRIGGER, for N = 0, 1 and max_lines - 1 in both scan modes.
+  - Line counting: with line_count = N, the delay starts at the onset of
+    line N + 1 (the Nth LINE edge after the one that coincides with
+    TRIGGER), for N = 0, 1 and max_lines - 1 in both scan modes, every
+    frame, also when LINE leads or lags TRIGGER by a few hundred ns.
   - PMT guards: PMT rises >= 1 us before GATE rises and falls >= 1 us
     after GATE falls, on every pulse.
   - Measurement: frame_us, line_ns and frame_lines in GET match the

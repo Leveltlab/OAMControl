@@ -31,6 +31,11 @@
 /* No TRIGGER for this long: the microscope has stopped, periods unknown. */
 #define FRAME_GAP_US 2000000
 
+/* The first LINE edge of a frame (line 1) coincides with TRIGGER. A LINE
+   edge up to this long after TRIGGER is that line and is not counted, so
+   polling order cannot decide whether it counts. */
+#define FIRST_LINE_WINDOW_US 2
+
 /*
  * Core 1 polls ARM, TRIGGER and LINE and generates the PMT and gate pulses;
  * it runs no interrupts, so serial IO on core 0 cannot delay or interrupt it.
@@ -44,7 +49,7 @@
  * frame that triggered it and the next TRIGGER always finds core 1 idle.
  */
 static volatile bool g_armed = false;
-static volatile uint32_t g_line_count = 0;   /* LINE edges after TRIGGER, < max_lines() */
+static volatile uint32_t g_line_count = 0;   /* lines to wait after TRIGGER, < max_lines() */
 static volatile uint32_t g_delay_us = 0;
 static volatile uint32_t g_pulse_us = 5000;
 static volatile uint32_t g_pulse_count = 1;  /* gate pulses per arm, >= 1 */
@@ -165,11 +170,14 @@ static void wait_until(absolute_time_t t)
  */
 static void run_sequence(absolute_time_t t_trigger)
 {
+    /* line_count = N: wait N whole lines, i.e. for the onset of line N + 1;
+       line 1 starts with TRIGGER and is never counted. */
     absolute_time_t t_ref = t_trigger;
+    absolute_time_t t_count_from = delayed_by_us(t_trigger, FIRST_LINE_WINDOW_US);
     uint32_t lines_left = g_armed_line_count;
     while (lines_left > 0) {
         trigger_rose();
-        if (line_rose()) {
+        if (line_rose() && absolute_time_diff_us(t_count_from, g_line_time) >= 0) {
             lines_left--;
             t_ref = g_line_time;
         }
