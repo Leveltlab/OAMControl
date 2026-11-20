@@ -273,7 +273,7 @@ const SCAN_MAX_LINES = { uni: 512, bi: 256 };
 const PMT_GUARD_US = 1;             // PMTs close this long before the gate and reopen this long after
 const MAX_PULSE_US = 10000 - 2 * PMT_GUARD_US;  // H11706 shutter: closed for at most 10 ms
 
-const $ = id => document.getElementById(id);
+const $ = id => document.getElementById(id);  //$ is a function
 const els = {
   connPill: $("connPill"), connectBtn: $("connectBtn"), disconnectBtn: $("disconnectBtn"),
   armPill: $("armPill"), stateNote: $("stateNote"),
